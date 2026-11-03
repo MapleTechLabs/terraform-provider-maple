@@ -1,6 +1,6 @@
 {
     "name": "terraform-provider-maple",
-    "version": "0.0.0",
+    "version": "0.1.0",
     "private": true,
     "description": "Release versioning for the Maple Terraform provider.",
     "license": "MIT",
