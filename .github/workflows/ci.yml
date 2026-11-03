@@ -1,0 +1,50 @@
+name: CI
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+
+permissions:
+    contents: read
+
+jobs:
+    test:
+        name: Test
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+              with:
+                  persist-credentials: false
+
+            - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+              with:
+                  go-version-file: go.mod
+                  cache: true
+
+            - name: gofmt -l
+              run: |
+                  diff=$(gofmt -l .)
+                  if [ -n "$diff" ]; then
+                    echo "::error::gofmt found unformatted files:"
+                    echo "$diff"
+                    exit 1
+                  fi
+
+            - name: go vet
+              run: go vet ./...
+
+            # Real `terraform` plan/apply/import cycles against the in-process fake API;
+            # terraform-plugin-testing installs a Terraform CLI when none is on PATH.
+            - name: go test
+              run: go test -race -count=1 ./...
+
+            - name: Registry docs are up to date
+              run: |
+                  go generate ./...
+                  if [ -n "$(git status --porcelain -- docs examples)" ]; then
+                    echo "::error::docs/ is stale: run go generate ./..."
+                    git status --porcelain -- docs examples
+                    exit 1
+                  fi

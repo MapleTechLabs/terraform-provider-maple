@@ -5,7 +5,7 @@ import (
 	"flag"
 	"log"
 
-	"github.com/MapleTechLabs/terraform-provider-maple/internal/provider"
+	"github.com/MapleTechLabs/terraform-provider-maple/provider"
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 )
 

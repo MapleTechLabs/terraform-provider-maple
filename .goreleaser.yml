@@ -1,5 +1,4 @@
-# Release build for the Terraform Registry. The Registry reads releases from a
-# repository named terraform-provider-maple; see README.md, "Releasing".
+# Release build for the Terraform Registry; see README.md, "Releasing".
 version: 2
 builds:
   - env:

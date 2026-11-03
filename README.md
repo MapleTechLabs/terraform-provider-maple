@@ -18,8 +18,8 @@ generated into [`docs/`](docs) from the schema descriptions and [`examples/`](ex
 
 ## How it works
 
-Every resource is one `resourceDef` in [`internal/provider/resources.go`](internal/provider/resources.go):
-a schema, its v2 collection path and a few per-attribute flags. [`generic_resource.go`](internal/provider/generic_resource.go)
+Every resource is one `resourceDef` in [`provider/resources.go`](provider/resources.go):
+a schema, its v2 collection path and a few per-attribute flags. [`generic_resource.go`](provider/generic_resource.go)
 does the CRUD for all of them: attribute names are the API's snake_case wire names, so the plan is sent
 as the request body and the response is read back into state.
 
@@ -32,6 +32,13 @@ as the request body and the response is read back into state.
 - **Removing an optional attribute** clears it: the update sends `null` (or `[]` for lists).
 - **`maple_api_key.rotate`** is a keeper. Changing it calls `POST /v2/api_keys/{id}/roll`, which revokes the
   key and returns a replacement with a new ID and secret.
+
+## Packages
+
+- [`provider`](provider) is the provider itself. It is exported so the
+  [Pulumi provider](https://github.com/MapleTechLabs/pulumi-maple) can wrap it with the Terraform bridge.
+- [`fakeapi`](fakeapi) is an in-memory Maple v2 API with the real API's defaults, write-only fields and
+  quirks. Both providers' tests run against it.
 
 ## Develop
 
@@ -55,11 +62,9 @@ then `MAPLE_API_URL=https://api.localhost MAPLE_API_KEY=maple_ak_… terraform p
 
 ## Releasing
 
-The Terraform Registry only publishes from a GitHub repository named `terraform-provider-<name>`
-with signed release assets. Releases therefore come from `MapleTechLabs/terraform-provider-maple`,
-which mirrors this directory: copy it over, tag `vX.Y.Z`, and run goreleaser with the GPG key
-whose public half is registered on the Registry namespace:
+Push a `vX.Y.Z` tag. The [release workflow](.github/workflows/release.yml) runs goreleaser, which signs
+the checksums with the GPG key whose public half is registered on the Registry namespace (secrets
+`GPG_PRIVATE_KEY` and `PASSPHRASE`). The Registry picks the release up from the webhook.
 
-```bash
-GPG_FINGERPRINT=… goreleaser release --clean
-```
+After a release, bump the provider in [pulumi-maple](https://github.com/MapleTechLabs/pulumi-maple) and
+regenerate its SDKs.

@@ -1,4 +1,4 @@
-package provider
+package fakeapi
 
 import (
 	"encoding/json"
@@ -22,24 +22,27 @@ type collection struct {
 	onCreate  func(obj map[string]any)
 }
 
-type fakeRequest struct {
+type request struct {
 	Method string
 	Path   string
 	Body   map[string]any
 }
 
-// fakeAPI is an in-memory Maple v2 API.
-type fakeAPI struct {
+// API is an in-memory Maple v2 API. It mirrors the real API's defaults, write-only
+// fields and per-resource quirks, so provider tests can run real plan/apply cycles.
+type API struct {
 	mu          sync.Mutex
 	collections map[string]collection
 	objects     map[string]map[string]any // path → object
 	next        int
-	requests    []fakeRequest
+	requests    []request
 	server      *httptest.Server
 }
 
-func newFakeAPI(t *testing.T) *fakeAPI {
-	api := &fakeAPI{
+// New starts the fake API; it is closed when the test ends. Requests must carry
+// the bearer key [Key].
+func New(t testing.TB) *API {
+	api := &API{
 		objects: map[string]map[string]any{},
 		collections: map[string]collection{
 			"/v2/dashboards": {prefix: "dash", defaults: map[string]any{
@@ -100,10 +103,10 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 	return api
 }
 
-func (api *fakeAPI) handle(w http.ResponseWriter, r *http.Request) {
+func (api *API) handle(w http.ResponseWriter, r *http.Request) {
 	api.mu.Lock()
 	defer api.mu.Unlock()
-	if r.Header.Get("Authorization") != "Bearer maple_ak_test" {
+	if r.Header.Get("Authorization") != "Bearer "+Key {
 		writeError(w, http.StatusUnauthorized, "authentication_error", "bad key")
 		return
 	}
@@ -111,7 +114,7 @@ func (api *fakeAPI) handle(w http.ResponseWriter, r *http.Request) {
 	if raw, _ := io.ReadAll(r.Body); len(raw) > 0 {
 		body, _ = client.Decode(raw)
 	}
-	api.requests = append(api.requests, fakeRequest{Method: r.Method, Path: r.URL.Path, Body: body})
+	api.requests = append(api.requests, request{Method: r.Method, Path: r.URL.Path, Body: body})
 
 	if r.URL.Path == "/v2/ingest_keys" && r.Method == http.MethodGet {
 		writeJSON(w, map[string]any{
@@ -233,8 +236,8 @@ func writeError(w http.ResponseWriter, status int, errType, message string) {
 	}})
 }
 
-// lastBody returns the body of the most recent request matching method and path prefix.
-func (api *fakeAPI) lastBody(method, pathPrefix string) map[string]any {
+// LastBody returns the body of the most recent request matching method and path prefix.
+func (api *API) LastBody(method, pathPrefix string) map[string]any {
 	api.mu.Lock()
 	defer api.mu.Unlock()
 	for i := len(api.requests) - 1; i >= 0; i-- {
@@ -246,7 +249,8 @@ func (api *fakeAPI) lastBody(method, pathPrefix string) map[string]any {
 	return nil
 }
 
-func (api *fakeAPI) count(method, pathPrefix string) int {
+// Count returns how many requests matched method and path prefix.
+func (api *API) Count(method, pathPrefix string) int {
 	api.mu.Lock()
 	defer api.mu.Unlock()
 	n := 0
@@ -258,11 +262,17 @@ func (api *fakeAPI) count(method, pathPrefix string) int {
 	return n
 }
 
-// mutate edits a stored object out of band, as a change made in the Maple UI.
-func (api *fakeAPI) mutate(path string, edit func(obj map[string]any)) {
+// Mutate edits a stored object out of band, as a change made in the Maple UI.
+func (api *API) Mutate(path string, edit func(obj map[string]any)) {
 	api.mu.Lock()
 	defer api.mu.Unlock()
 	if obj, ok := api.objects[path]; ok {
 		edit(obj)
 	}
 }
+
+// Key is the only API key the fake accepts.
+const Key = "maple_ak_test"
+
+// URL is the fake API's base URL, for the provider's api_url.
+func (api *API) URL() string { return api.server.URL }

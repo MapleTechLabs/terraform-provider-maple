@@ -2,6 +2,7 @@ package provider
 
 import (
 	"fmt"
+	"github.com/MapleTechLabs/terraform-provider-maple/fakeapi"
 	"regexp"
 	"testing"
 
@@ -16,17 +17,17 @@ var factories = map[string]func() (tfprotov6.ProviderServer, error){
 	"maple": providerserver.NewProtocol6WithError(New("test")()),
 }
 
-func providerBlock(api *fakeAPI) string {
+func providerBlock(api *fakeapi.API) string {
 	return fmt.Sprintf(`
 provider "maple" {
   api_url = %q
-  api_key = "maple_ak_test"
+  api_key = %q
 }
-`, api.server.URL)
+`, api.URL(), fakeapi.Key)
 }
 
 func TestDashboardLifecycle(t *testing.T) {
-	api := newFakeAPI(t)
+	api := fakeapi.New(t)
 	widgets := `widgets = jsonencode([
     { id = "w1", visualization = "chart", layout = { x = 0, y = 0, w = 6, h = 4 } },
   ])`
@@ -65,7 +66,7 @@ resource "maple_dashboard" "ops" {
 					resource.TestCheckResourceAttr("maple_dashboard.ops", "name", "Operations v2"),
 					resource.TestCheckNoResourceAttr("maple_dashboard.ops", "description"),
 					func(*terraform.State) error {
-						body := api.lastBody("PATCH", "/v2/dashboards/")
+						body := api.LastBody("PATCH", "/v2/dashboards/")
 						if v, ok := body["description"]; !ok || v != nil {
 							return fmt.Errorf("PATCH body should clear description, got %v", body)
 						}
@@ -77,7 +78,7 @@ resource "maple_dashboard" "ops" {
 			{
 				// A widget edited in the UI shows up as drift and is put back.
 				PreConfig: func() {
-					api.mutate("/v2/dashboards/"+firstID, func(obj map[string]any) {
+					api.Mutate("/v2/dashboards/"+firstID, func(obj map[string]any) {
 						obj["widgets"] = []any{map[string]any{"id": "w1", "visualization": "table"}}
 					})
 				},
@@ -92,7 +93,7 @@ resource "maple_dashboard" "ops" {
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckNoResourceAttr("maple_dashboard.ops", "widgets"),
 					func(*terraform.State) error {
-						body := api.lastBody("PATCH", "/v2/dashboards/")
+						body := api.LastBody("PATCH", "/v2/dashboards/")
 						if w, ok := body["widgets"].([]any); !ok || len(w) != 0 {
 							return fmt.Errorf("PATCH should send widgets = [], got %v", body)
 						}
@@ -108,7 +109,7 @@ resource "maple_dashboard" "ops" {
 			},
 		},
 		CheckDestroy: func(*terraform.State) error {
-			if api.count("DELETE", "/v2/dashboards/") != 1 {
+			if api.Count("DELETE", "/v2/dashboards/") != 1 {
 				return fmt.Errorf("expected one DELETE")
 			}
 			return nil
@@ -117,7 +118,7 @@ resource "maple_dashboard" "ops" {
 }
 
 func TestAlertRuleWithDestination(t *testing.T) {
-	api := newFakeAPI(t)
+	api := fakeapi.New(t)
 	config := func(notes string) string {
 		n := ""
 		if notes != "" {
@@ -159,7 +160,7 @@ resource "maple_alert_rule" "errors" {
 					resource.TestCheckResourceAttr("maple_alert_rule.errors", "consecutive_breaches_required", "2"),
 					resource.TestCheckResourceAttr("maple_alert_rule.errors", "thresholds", `[{"destination_ids":["dest_1"],"recovery_value":null,"severity":"critical","upper":null,"value":0.05}]`),
 					func(*terraform.State) error {
-						body := api.lastBody("POST", "/v2/alerts/destinations")
+						body := api.LastBody("POST", "/v2/alerts/destinations")
 						if body["signing_secret"] != "s3cret" || body["url"] != "https://hooks.example.com/maple" {
 							return fmt.Errorf("destination create body missing channel fields: %v", body)
 						}
@@ -170,7 +171,7 @@ resource "maple_alert_rule" "errors" {
 			{
 				Config: config(""),
 				Check: func(*terraform.State) error {
-					body := api.lastBody("PATCH", "/v2/alerts/rules/")
+					body := api.LastBody("PATCH", "/v2/alerts/rules/")
 					if v, ok := body["notes"]; !ok || v != nil {
 						return fmt.Errorf("PATCH should clear notes, got %v", body)
 					}
@@ -187,7 +188,7 @@ resource "maple_alert_rule" "errors" {
 }
 
 func TestAlertRuleRejectsUppercaseTags(t *testing.T) {
-	api := newFakeAPI(t)
+	api := fakeapi.New(t)
 	resource.UnitTest(t, resource.TestCase{
 		ProtoV6ProviderFactories: factories,
 		Steps: []resource.TestStep{{
@@ -206,7 +207,7 @@ resource "maple_alert_rule" "r" {
 }
 
 func TestApiKeyRotateAndRevoke(t *testing.T) {
-	api := newFakeAPI(t)
+	api := fakeapi.New(t)
 	config := func(rotate string) string {
 		return providerBlock(api) + fmt.Sprintf(`
 resource "maple_api_key" "ci" {
@@ -250,7 +251,7 @@ resource "maple_api_key" "ci" {
 			{
 				// A key revoked outside Terraform is created again.
 				PreConfig: func() {
-					api.mutate("/v2/api_keys/"+rolledID, func(obj map[string]any) { obj["revoked"] = true })
+					api.Mutate("/v2/api_keys/"+rolledID, func(obj map[string]any) { obj["revoked"] = true })
 				},
 				Config: config("2026-11"),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
@@ -259,13 +260,13 @@ resource "maple_api_key" "ci" {
 			},
 		},
 	})
-	if api.count("POST", "/v2/api_keys/"+firstID+"/roll") != 1 {
+	if api.Count("POST", "/v2/api_keys/"+firstID+"/roll") != 1 {
 		t.Fatalf("expected exactly one roll of %s", firstID)
 	}
 }
 
 func TestUptimeMonitorTypeChangeReplaces(t *testing.T) {
-	api := newFakeAPI(t)
+	api := fakeapi.New(t)
 	httpConfig := providerBlock(api) + `
 resource "maple_uptime_monitor" "site" {
   name = "Website"
@@ -298,7 +299,7 @@ resource "maple_uptime_monitor" "site" {
 					resource.TestCheckResourceAttr("maple_uptime_monitor.site", "kind", "http"),
 					captureID("maple_uptime_monitor.site", &firstID),
 					func(*terraform.State) error {
-						if kind := api.lastBody("POST", "/v2/uptime_monitors")["kind"]; kind != "http" {
+						if kind := api.LastBody("POST", "/v2/uptime_monitors")["kind"]; kind != "http" {
 							return fmt.Errorf("create body kind = %v, want http", kind)
 						}
 						return nil
@@ -320,7 +321,7 @@ resource "maple_uptime_monitor" "site" {
 }
 
 func TestScrapeTargetCredentialsAreWriteOnly(t *testing.T) {
-	api := newFakeAPI(t)
+	api := fakeapi.New(t)
 	resource.UnitTest(t, resource.TestCase{
 		ProtoV6ProviderFactories: factories,
 		Steps: []resource.TestStep{
@@ -350,7 +351,7 @@ resource "maple_scrape_target" "node" {
 }
 
 func TestIngestKeysDataSource(t *testing.T) {
-	api := newFakeAPI(t)
+	api := fakeapi.New(t)
 	resource.UnitTest(t, resource.TestCase{
 		ProtoV6ProviderFactories: factories,
 		Steps: []resource.TestStep{{
