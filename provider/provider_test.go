@@ -398,3 +398,48 @@ func sameID(name string, want *string) resource.TestCheckFunc {
 		return nil
 	}
 }
+
+// Hosts that cannot change an ID on update (Pulumi) replace the key instead of
+// rolling it: a new key is created and the old one revoked, never rolled.
+func TestApiKeyRotateReplacesWithOption(t *testing.T) {
+	api := fakeapi.New(t)
+	config := func(rotate string) string {
+		return providerBlock(api) + fmt.Sprintf(`
+resource "maple_api_key" "ci" {
+  name   = "ci"
+  rotate = %q
+}
+`, rotate)
+	}
+	var firstID, secondID string
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: map[string]func() (tfprotov6.ProviderServer, error){
+			"maple": providerserver.NewProtocol6WithError(New("test", WithRotateReplaces())()),
+		},
+		Steps: []resource.TestStep{
+			{
+				Config: config("2026-10"),
+				Check:  captureID("maple_api_key.ci", &firstID),
+			},
+			{
+				Config: config("2026-11"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("maple_api_key.ci", plancheck.ResourceActionDestroyBeforeCreate)},
+				},
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestMatchResourceAttr("maple_api_key.ci", "secret", regexp.MustCompile(`^maple_ak_new`)),
+					captureID("maple_api_key.ci", &secondID),
+				),
+			},
+		},
+	})
+	if secondID == firstID {
+		t.Fatalf("replacement kept ID %s", firstID)
+	}
+	if n := api.Count("POST", "/v2/api_keys/"+firstID+"/roll"); n != 0 {
+		t.Fatalf("rolled %d times, want a replace", n)
+	}
+	if n := api.Count("DELETE", "/v2/api_keys/"+firstID); n != 1 {
+		t.Fatalf("old key revoked %d times, want 1", n)
+	}
+}

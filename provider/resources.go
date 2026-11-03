@@ -176,8 +176,16 @@ func alertRuleDef() resourceDef {
 	}
 }
 
-func apiKeyDef() resourceDef {
+func apiKeyDef(rotateReplaces bool) resourceDef {
 	replace := []planmodifier.String{stringplanmodifier.RequiresReplace()}
+	idModifiers := []planmodifier.String{rotateChangesID{}}
+	rotateDescription := "Any value; changing it rolls the key: Maple revokes it and issues a replacement with the same name, description, kind and scopes, a new ID and a new secret. For example the `id` of a `time_rotating` resource."
+	var rotateModifiers []planmodifier.String
+	if rotateReplaces {
+		idModifiers = []planmodifier.String{stringplanmodifier.UseStateForUnknown()}
+		rotateModifiers = replace
+		rotateDescription = "Any value; changing it replaces the key: a new key with a new ID and secret is created, then the old one is revoked."
+	}
 	return resourceDef{
 		typeName:   "api_key",
 		collection: "/v2/api_keys",
@@ -204,7 +212,7 @@ func apiKeyDef() resourceDef {
 				"id": schema.StringAttribute{
 					Computed:      true,
 					Description:   "The `key_…` public ID. Rolling the key (changing `rotate`) issues a new ID.",
-					PlanModifiers: []planmodifier.String{rotateChangesID{}},
+					PlanModifiers: idModifiers,
 				},
 				"name":        schema.StringAttribute{Required: true, Description: "Key name. Changing it replaces the key.", PlanModifiers: replace},
 				"description": schema.StringAttribute{Optional: true, Description: "Changing it replaces the key.", PlanModifiers: replace},
@@ -224,8 +232,9 @@ func apiKeyDef() resourceDef {
 					PlanModifiers: []planmodifier.Int64{int64planmodifier.RequiresReplace()},
 				},
 				"rotate": schema.StringAttribute{
-					Optional:    true,
-					Description: "Any value; changing it rolls the key: Maple revokes it and issues a replacement with the same name, description, kind and scopes, a new ID and a new secret. For example the `id` of a `time_rotating` resource.",
+					Optional:      true,
+					Description:   rotateDescription,
+					PlanModifiers: rotateModifiers,
 				},
 				"key_prefix": schema.StringAttribute{Computed: true, Description: "The visible start of the secret, as shown in Maple."},
 				"secret":     schema.StringAttribute{Computed: true, Sensitive: true, Description: "The `maple_ak_…` secret."},

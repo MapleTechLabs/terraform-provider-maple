@@ -16,6 +16,7 @@ import (
 
 type mapleProvider struct {
 	version string
+	options options
 }
 
 type providerModel struct {
@@ -23,8 +24,27 @@ type providerModel struct {
 	APIURL types.String `tfsdk:"api_url"`
 }
 
-func New(version string) func() provider.Provider {
-	return func() provider.Provider { return &mapleProvider{version: version} }
+type options struct {
+	rotateReplaces bool
+}
+
+// Option adjusts the provider for hosts other than Terraform.
+type Option func(*options)
+
+// WithRotateReplaces makes a change to `maple_api_key.rotate` replace the key
+// instead of rolling it in place. Rolling gives the key a new ID during an update,
+// which Terraform accepts and Pulumi does not; a replace creates the new key and
+// then revokes the old one.
+func WithRotateReplaces() Option {
+	return func(o *options) { o.rotateReplaces = true }
+}
+
+func New(version string, opts ...Option) func() provider.Provider {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return func() provider.Provider { return &mapleProvider{version: version, options: o} }
 }
 
 func (p *mapleProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -89,7 +109,7 @@ func (p *mapleProvider) Resources(_ context.Context) []func() resource.Resource 
 	return []func() resource.Resource{
 		newResource(alertDestinationDef()),
 		newResource(alertRuleDef()),
-		newResource(apiKeyDef()),
+		newResource(apiKeyDef(p.options.rotateReplaces)),
 		newResource(dashboardDef()),
 		newResource(scrapeTargetDef()),
 		newResource(uptimeMonitorDef()),
