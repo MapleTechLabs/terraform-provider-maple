@@ -62,9 +62,15 @@ then `MAPLE_API_URL=https://api.localhost MAPLE_API_KEY=maple_ak_… terraform p
 
 ## Releasing
 
-Push a `vX.Y.Z` tag. The [release workflow](.github/workflows/release.yml) runs goreleaser, which signs
-the checksums with the GPG key whose public half is registered on the Registry namespace (secrets
+Versions come from [`@maple-dev/changesets`](https://github.com/MapleTechLabs/changesets). Add one with
+`npx changeset` in any PR that changes what users get. The [release workflow](.github/workflows/release.yml)
+keeps a "Version Packages" PR open; merging it tags `vX.Y.Z` and runs goreleaser, which signs the
+checksums with the GPG key whose public half is registered on the Registry namespace (secrets
 `GPG_PRIVATE_KEY` and `PASSPHRASE`). The Registry picks the release up from the webhook.
 
 After a release, bump the provider in [pulumi-maple](https://github.com/MapleTechLabs/pulumi-maple) and
 regenerate its SDKs.
+
+## License
+
+[MIT](LICENSE)

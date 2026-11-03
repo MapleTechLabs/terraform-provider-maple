@@ -1,0 +1,15 @@
+{
+    "name": "terraform-provider-maple",
+    "version": "0.0.0",
+    "private": true,
+    "description": "Release versioning for the Maple Terraform provider.",
+    "license": "MIT",
+    "scripts": {
+        "changeset": "changeset",
+        "version-packages": "changeset version",
+        "release": "node scripts/tag-release.mjs"
+    },
+    "devDependencies": {
+        "@maple-dev/changesets": "^0.1.2"
+    }
+}

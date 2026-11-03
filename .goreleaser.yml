@@ -36,6 +36,8 @@ signs:
       - "--detach-sign"
       - "${artifact}"
 release:
+  # changesets/action already cut the release for this tag; add the assets to it.
+  mode: keep-existing
   extra_files:
     - glob: terraform-registry-manifest.json
       name_template: "{{ .ProjectName }}_{{ .Version }}_manifest.json"
