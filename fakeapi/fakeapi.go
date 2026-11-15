@@ -23,9 +23,10 @@ type collection struct {
 }
 
 type request struct {
-	Method string
-	Path   string
-	Body   map[string]any
+	Method    string
+	Path      string
+	Body      map[string]any
+	UserAgent string
 }
 
 // API is an in-memory Maple v2 API. It mirrors the real API's defaults, write-only
@@ -114,7 +115,7 @@ func (api *API) handle(w http.ResponseWriter, r *http.Request) {
 	if raw, _ := io.ReadAll(r.Body); len(raw) > 0 {
 		body, _ = client.Decode(raw)
 	}
-	api.requests = append(api.requests, request{Method: r.Method, Path: r.URL.Path, Body: body})
+	api.requests = append(api.requests, request{Method: r.Method, Path: r.URL.Path, Body: body, UserAgent: r.UserAgent()})
 
 	if r.URL.Path == "/v2/ingest_keys" && r.Method == http.MethodGet {
 		writeJSON(w, map[string]any{
@@ -269,6 +270,21 @@ func (api *API) Mutate(path string, edit func(obj map[string]any)) {
 	if obj, ok := api.objects[path]; ok {
 		edit(obj)
 	}
+}
+
+// UserAgents lists the distinct User-Agent headers the fake has received.
+func (api *API) UserAgents() []string {
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	seen := map[string]bool{}
+	var out []string
+	for _, r := range api.requests {
+		if !seen[r.UserAgent] {
+			seen[r.UserAgent] = true
+			out = append(out, r.UserAgent)
+		}
+	}
+	return out
 }
 
 // Key is the only API key the fake accepts.

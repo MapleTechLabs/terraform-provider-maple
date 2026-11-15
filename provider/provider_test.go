@@ -364,6 +364,31 @@ func TestIngestKeysDataSource(t *testing.T) {
 	})
 }
 
+// Terraform identifies as itself; a host embedding the provider names its own product.
+func TestUserAgent(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts []Option
+		want string
+	}{
+		{"terraform", nil, "terraform-provider-maple/1.2.3"},
+		{"embedded", []Option{WithUserAgent("pulumi-maple")}, "pulumi-maple/1.2.3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := fakeapi.New(t)
+			resource.UnitTest(t, resource.TestCase{
+				ProtoV6ProviderFactories: map[string]func() (tfprotov6.ProviderServer, error){
+					"maple": providerserver.NewProtocol6WithError(New("1.2.3", tc.opts...)()),
+				},
+				Steps: []resource.TestStep{{Config: providerBlock(api) + `data "maple_ingest_keys" "this" {}`}},
+			})
+			if got := api.UserAgents(); len(got) != 1 || got[0] != tc.want {
+				t.Fatalf("User-Agent %q, want [%q]", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestMissingAPIKey(t *testing.T) {
 	t.Setenv("MAPLE_API_KEY", "")
 	resource.UnitTest(t, resource.TestCase{
