@@ -26,6 +26,7 @@ type providerModel struct {
 
 type options struct {
 	rotateReplaces bool
+	userAgent      string
 }
 
 // Option adjusts the provider for hosts other than Terraform.
@@ -39,8 +40,14 @@ func WithRotateReplaces() Option {
 	return func(o *options) { o.rotateReplaces = true }
 }
 
+// WithUserAgent names the product in the User-Agent header, so API traffic from a
+// host that embeds this provider (e.g. "pulumi-maple") is not counted as Terraform.
+func WithUserAgent(product string) Option {
+	return func(o *options) { o.userAgent = product }
+}
+
 func New(version string, opts ...Option) func() provider.Provider {
-	var o options
+	o := options{userAgent: "terraform-provider-maple"}
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -100,7 +107,7 @@ func (p *mapleProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		)
 		return
 	}
-	c := client.New(apiURL, apiKey, "terraform-provider-maple/"+p.version)
+	c := client.New(apiURL, apiKey, p.options.userAgent+"/"+p.version)
 	resp.ResourceData = c
 	resp.DataSourceData = c
 }
