@@ -72,8 +72,17 @@ func (c *Client) Post(ctx context.Context, path string, body any) (Object, error
 	return c.do(ctx, http.MethodPost, path, body)
 }
 
+// PostRetrying is Post for an endpoint that is safe to repeat, retried like GET.
+func (c *Client) PostRetrying(ctx context.Context, path string, body any) (Object, error) {
+	return c.send(ctx, http.MethodPost, path, body, true)
+}
+
 func (c *Client) Patch(ctx context.Context, path string, body any) (Object, error) {
 	return c.do(ctx, http.MethodPatch, path, body)
+}
+
+func (c *Client) Put(ctx context.Context, path string, body any) (Object, error) {
+	return c.do(ctx, http.MethodPut, path, body)
 }
 
 func (c *Client) Delete(ctx context.Context, path string) error {
@@ -84,6 +93,11 @@ func (c *Client) Delete(ctx context.Context, path string) error {
 const maxAttempts = 6
 
 func (c *Client) do(ctx context.Context, method, path string, body any) (Object, error) {
+	// Only idempotent methods retry on their own; a retried POST could create twice.
+	return c.send(ctx, method, path, body, method == http.MethodGet || method == http.MethodPut || method == http.MethodDelete)
+}
+
+func (c *Client) send(ctx context.Context, method, path string, body any, idempotent bool) (Object, error) {
 	var payload []byte
 	if body != nil {
 		encoded, err := json.Marshal(body)
@@ -92,8 +106,6 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (Object,
 		}
 		payload = encoded
 	}
-	// Only idempotent methods retry on their own; a retried POST could create twice.
-	idempotent := method == http.MethodGet || method == http.MethodDelete
 	for attempt := 0; ; attempt++ {
 		result, err := c.attempt(ctx, method, path, payload)
 		var apiErr *APIError
