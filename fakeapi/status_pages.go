@@ -65,10 +65,12 @@ func (api *API) applyConfig(id string, page *statusPage, doc map[string]any) (in
 	if v, ok := doc["visibility"]; ok {
 		visibility = v
 	}
-	if visibility == "password" && !page.hasPassword {
+	// As the API, the rules apply only to a visibility change.
+	changed := visibility != page.config["visibility"]
+	if changed && visibility == "password" && !page.hasPassword {
 		return http.StatusBadRequest, "Set a page password before making the page password-protected"
 	}
-	if visibility == "internal" && page.hostname != nil {
+	if changed && visibility == "internal" && page.hostname != nil {
 		return http.StatusBadRequest, "Remove the custom domain before making the page internal"
 	}
 	existing := map[any]bool{}
@@ -188,9 +190,14 @@ func (api *API) handleStatusPage(w http.ResponseWriter, r *http.Request, body ma
 			writeError(w, http.StatusBadRequest, "invalid_request_error", "An internal page cannot have a custom domain")
 			return
 		}
-		page.hostname = body["hostname"]
+		// As the API: trimmed, lowercased, without a trailing dot.
+		page.hostname = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(fmt.Sprint(body["hostname"]))), ".")
 		writeJSON(w, page.domain(id))
 	case "DELETE custom_domain":
+		if page.hostname == nil {
+			writeError(w, http.StatusNotFound, "not_found_error", "This status page has no custom domain")
+			return
+		}
 		page.hostname = nil
 		writeJSON(w, page.domain(id))
 	case "POST publish":

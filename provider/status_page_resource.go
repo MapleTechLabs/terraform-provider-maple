@@ -38,6 +38,7 @@ var (
 	_ resource.ResourceWithConfigure      = (*statusPageResource)(nil)
 	_ resource.ResourceWithImportState    = (*statusPageResource)(nil)
 	_ resource.ResourceWithValidateConfig = (*statusPageResource)(nil)
+	_ resource.ResourceWithModifyPlan     = (*statusPageResource)(nil)
 )
 
 func newStatusPageResource() resource.Resource { return &statusPageResource{} }
@@ -105,7 +106,9 @@ var (
 	defaultTheme = map[string]string{"preset": "default", "appearance": "auto", "radius": "md", "font": "sans"}
 	hexColor     = regexp.MustCompile(`^#[0-9a-f]{6}$`)
 	// The API trims names; a name it would change could never match its state.
-	trimmed = []validator.String{stringvalidator.RegexMatches(regexp.MustCompile(`^\S(.*\S)?$`), "must not start or end with whitespace")}
+	trimmed = []validator.String{stringvalidator.RegexMatches(regexp.MustCompile(`(?s)^\S(.*\S)?$`), "must not start or end with whitespace")}
+	// The API lowercases a hostname and drops a trailing dot; one it would change could never match its state.
+	hostname = []validator.String{stringvalidator.RegexMatches(regexp.MustCompile(`^[^A-Z\s]*[^A-Z\s.]$`), "must be lowercase, without surrounding whitespace or a trailing dot")}
 )
 
 func (r *statusPageResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -114,7 +117,7 @@ func (r *statusPageResource) Metadata(_ context.Context, req resource.MetadataRe
 
 func (r *statusPageResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	optionalText := func(description string) schema.StringAttribute {
-		return schema.StringAttribute{Optional: true, Description: description, Validators: []validator.String{stringvalidator.LengthAtLeast(1)}}
+		return schema.StringAttribute{Optional: true, Description: description, Validators: trimmed}
 	}
 	choice := func(description, def string, values ...string) schema.StringAttribute {
 		return schema.StringAttribute{Optional: true, Computed: true, Description: description, Default: stringdefault.StaticString(def), Validators: oneOf(values...)}
@@ -184,8 +187,9 @@ func (r *statusPageResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			},
 			"components": schema.ListNestedAttribute{
 				Optional: true, Computed: true,
-				Description: "Every component, in display order (at most 200). Components are matched to the page's existing ones by name, so their IDs, incidents and uptime history survive edits; a renamed one is recreated, and one left out is deleted.",
-				Default:     listdefault.StaticValue(types.ListValueMust(types.ObjectType{AttrTypes: componentAttrTypes}, []attr.Value{})),
+				Description:   "Every component, in display order (at most 200). Components are matched to the page's existing ones by name, so their IDs, incidents and uptime history survive edits; a renamed one is recreated, and one left out is deleted.",
+				Default:       listdefault.StaticValue(types.ListValueMust(types.ObjectType{AttrTypes: componentAttrTypes}, []attr.Value{})),
+				PlanModifiers: []planmodifier.List{componentIDsKeepState{}},
 				NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
 					"id":          schema.StringAttribute{Computed: true, Description: "The `stc_…` component ID, for incidents posted through the API."},
 					"name":        schema.StringAttribute{Required: true, Description: "Component name.", Validators: trimmed},
@@ -206,11 +210,12 @@ func (r *statusPageResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			},
 			"password": schema.StringAttribute{
 				Optional: true, Sensitive: true,
-				Description: "The password visitors of a `password` page enter, 8 to 256 characters. Stored by Maple only as a hash, so Terraform cannot see it change outside Terraform. Removing it removes the password.",
-				Validators:  []validator.String{stringvalidator.LengthBetween(8, 256)},
+				Description: "The password visitors of a `password` page enter, 8 to 256 characters. Stored by Maple only as a hash, so Terraform cannot see it change outside Terraform. Unset removes the password, unless the page keeps `password` visibility set outside Terraform.",
+				Validators:  []validator.String{stringvalidator.UTF8LengthBetween(8, 256)},
 			},
 			"custom_domain": schema.StringAttribute{
 				Optional:    true,
+				Validators:  hostname,
 				Description: "Also serve the page on this hostname, e.g. `status.acme.com`. Add the records in `custom_domain_dns_records` at your DNS provider. Removing it removes the domain.",
 			},
 			"custom_domain_cname_target": schema.StringAttribute{
@@ -274,7 +279,8 @@ func (r *statusPageResource) Create(ctx context.Context, req resource.CreateRequ
 		tainted("Configuring status page "+id, err.Error())
 		return
 	}
-	if _, err := r.client.Post(ctx, pagePath(id)+"/publish", nil); err != nil {
+	// Publishing an already public page changes nothing, so it is safe to retry.
+	if _, err := r.client.PostRetrying(ctx, pagePath(id)+"/publish", nil); err != nil {
 		tainted("Publishing status page "+id, err.Error())
 		return
 	}
@@ -367,7 +373,8 @@ func (r *statusPageResource) apply(ctx context.Context, id string, plan statusPa
 		return passwordSet, err
 	}
 	if plan.CustomDomain.IsNull() && !priorDomain.IsNull() && domain["hostname"] != nil {
-		if err := r.client.Delete(ctx, base+"/custom_domain"); err != nil {
+		// A retried DELETE may find the domain already gone.
+		if err := r.client.Delete(ctx, base+"/custom_domain"); err != nil && !client.IsNotFound(err) {
 			return passwordSet, fmt.Errorf("removing the custom domain: %w", err)
 		}
 	}
@@ -399,7 +406,13 @@ func (r *statusPageResource) apply(ctx context.Context, id string, plan statusPa
 			return passwordSet, fmt.Errorf("setting the custom domain: %w", err)
 		}
 	}
-	if plan.Password.IsNull() && !priorPassword.IsNull() && hasPassword {
+	// Unset removes the password, unless the page stays password-protected: then it
+	// was set outside Terraform (ModifyPlan refuses removing one Terraform set).
+	visibility := plan.Visibility.ValueString()
+	if plan.Visibility.IsNull() || plan.Visibility.IsUnknown() {
+		visibility = fmt.Sprint(page["visibility"])
+	}
+	if plan.Password.IsNull() && hasPassword && visibility != "password" {
 		if err := r.client.Delete(ctx, base+"/password"); err != nil {
 			return passwordSet, fmt.Errorf("removing the password: %w", err)
 		}
@@ -512,6 +525,9 @@ func (r *statusPageResource) readInto(ctx context.Context, id string, base statu
 	if !base.Components.IsNull() && !base.Components.IsUnknown() {
 		diags.Append(base.Components.ElementsAs(ctx, &userComponents, false)...)
 	}
+	// With no components to compare (an import), every override reads as unset, like the
+	// config that adopts it: a configured status then plans as a change, an unset one keeps.
+	importing := base.Components.IsNull() || base.Components.IsUnknown()
 	unsetStatus := map[string]int{}
 	for _, c := range userComponents {
 		if c.ManualStatus.IsNull() {
@@ -524,7 +540,7 @@ func (r *statusPageResource) readInto(ctx context.Context, id string, base statu
 		c, _ := raw.(map[string]any)
 		name := fmt.Sprint(c["name"])
 		status := str(c["manual_status"])
-		if unsetStatus[name] > 0 {
+		if importing || unsetStatus[name] > 0 {
 			unsetStatus[name]--
 			status = types.StringNull()
 		}
@@ -665,4 +681,64 @@ func (m sameDomainKeepsState) PlanModifyList(ctx context.Context, req planmodifi
 	if req.PlanValue.IsUnknown() && m.unchanged(ctx, req.Plan, req.State) {
 		resp.PlanValue = req.StateValue
 	}
+}
+
+// ModifyPlan refuses removing the password Terraform set while the page stays
+// password-protected, which the API refuses after the config is already written.
+func (r *statusPageResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
+		return
+	}
+	var configured, prior statusPageModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &configured)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &prior)...)
+	if resp.Diagnostics.HasError() || !configured.Password.IsNull() || prior.Password.IsNull() {
+		return
+	}
+	visibility := configured.Visibility
+	if visibility.IsNull() {
+		visibility = prior.Visibility
+	}
+	if visibility.ValueString() == "password" {
+		resp.Diagnostics.AddAttributeError(path.Root("password"), "Password removed from a password-protected page",
+			"A password page needs its password. Set visibility to \"public\" or \"internal\" to remove it.")
+	}
+}
+
+// componentIDsKeepState plans a component's ID as the one in state for a component
+// of the same name, which the apply matches to, so references to it stay known.
+type componentIDsKeepState struct{}
+
+func (componentIDsKeepState) Description(context.Context) string {
+	return "Keeps the ID of a component whose name is in state."
+}
+
+func (m componentIDsKeepState) MarkdownDescription(ctx context.Context) string {
+	return m.Description(ctx)
+}
+
+func (componentIDsKeepState) PlanModifyList(ctx context.Context, req planmodifier.ListRequest, resp *planmodifier.ListResponse) {
+	if req.StateValue.IsNull() || req.PlanValue.IsNull() || req.PlanValue.IsUnknown() {
+		return
+	}
+	var planned, prior []statusPageComponentModel
+	if req.PlanValue.ElementsAs(ctx, &planned, false).HasError() || req.StateValue.ElementsAs(ctx, &prior, false).HasError() {
+		return
+	}
+	claimed := make([]bool, len(prior))
+	for i, c := range planned {
+		if !c.ID.IsUnknown() || c.Name.IsUnknown() {
+			continue
+		}
+		for j, p := range prior {
+			if !claimed[j] && p.Name.Equal(c.Name) {
+				claimed[j] = true
+				planned[i].ID = p.ID
+				break
+			}
+		}
+	}
+	list, diags := types.ListValueFrom(ctx, types.ObjectType{AttrTypes: componentAttrTypes}, planned)
+	resp.Diagnostics.Append(diags...)
+	resp.PlanValue = list
 }

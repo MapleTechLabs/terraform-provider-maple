@@ -20,6 +20,10 @@ func TestStatusPageRejectsWhatTheAPIWouldRefuseMidApply(t *testing.T) {
 		"internal with a domain": {`visibility = "internal"
   custom_domain = "status.acme.test"`, `cannot have a custom domain`},
 		"duplicate names": {`components = [{ name = "API" }, { name = "API" }]`, `must be unique`},
+		// The API normalizes these, so state could never match the config.
+		"uppercase domain":       {`custom_domain = "Status.Acme.test"`, `must be lowercase`},
+		"domain trailing dot":    {`custom_domain = "status.acme.test."`, `must be lowercase`},
+		"description whitespace": {"description = \"Our status\\n\"", `must not start or end with whitespace`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			resource.UnitTest(t, resource.TestCase{
@@ -153,8 +157,10 @@ resource "maple_status_page" "acme" {
 					})
 				},
 				// The domain is unchanged, so its records stay known for a for_each over them.
+				// Component IDs stay known too.
 				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
 					plancheck.ExpectKnownValue(page, tfjsonpath.New("custom_domain_dns_records"), knownvalue.ListSizeExact(2)),
+					plancheck.ExpectKnownValue(page, tfjsonpath.New("components").AtSliceIndex(1).AtMapKey("id"), knownvalue.StringRegexp(regexp.MustCompile(`^stc_`))),
 				}},
 				Config: strings.Replace(initial, `support_url   = "https://acme.test/support"`, `support_url   = "https://acme.test/help"`, 1),
 				Check: func(*terraform.State) error {
@@ -190,11 +196,10 @@ resource "maple_status_page" "acme" {
 				),
 			},
 			{
+				// The override set outside Terraform imports as unset, as the config leaves it.
 				ResourceName:      page,
 				ImportState:       true,
 				ImportStateVerify: true,
-				// The override was set outside Terraform; the import reads it as Maple holds it.
-				ImportStateVerifyIgnore: []string{"components.1.manual_status"},
 			},
 		},
 		CheckDestroy: func(*terraform.State) error {
@@ -202,6 +207,44 @@ resource "maple_status_page" "acme" {
 				return fmt.Errorf("status page %s still exists", pageID)
 			}
 			return nil
+		},
+	})
+}
+
+func TestStatusPageRefusesRemovingThePasswordOfAPasswordPage(t *testing.T) {
+	api := fakeapi.New(t)
+	page := func(extra string) string {
+		return providerBlock(api) + `
+resource "maple_status_page" "acme" {
+  name = "Acme Status"
+  slug = "acme-status"
+  ` + extra + `
+}
+`
+	}
+	var pageID string
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config: page(`visibility = "password"
+  password = "correct horse battery"`),
+				Check: captureID("maple_status_page.acme", &pageID),
+			},
+			{
+				// Unset visibility keeps "password", which needs the password.
+				Config:      page(``),
+				ExpectError: regexp.MustCompile(`Password removed from a password-protected page`),
+			},
+			{
+				Config: page(`visibility = "public"`),
+				Check: func(*terraform.State) error {
+					if view, _, _ := api.StatusPage(pageID); view["visibility"] != "public" || view["has_password"] != false {
+						return fmt.Errorf("page not public without a password: %v", view)
+					}
+					return nil
+				},
+			},
 		},
 	})
 }

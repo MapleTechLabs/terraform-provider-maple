@@ -68,7 +68,7 @@ resource "cloudflare_dns_record" "status" {
 - `favicon_url` (String) The browser tab icon. An https URL, or an uploaded image as a base64 `data:image/...` URL of at most 128 KB, e.g. `"data:image/png;base64,${filebase64("logo.png")}"`.
 - `logo_dark_url` (String) A logo shown in dark mode instead of `logo_url`. An https URL, or an uploaded image as a base64 `data:image/...` URL of at most 128 KB, e.g. `"data:image/png;base64,${filebase64("logo.png")}"`.
 - `logo_url` (String) The logo. An https URL, or an uploaded image as a base64 `data:image/...` URL of at most 128 KB, e.g. `"data:image/png;base64,${filebase64("logo.png")}"`.
-- `password` (String, Sensitive) The password visitors of a `password` page enter, 8 to 256 characters. Stored by Maple only as a hash, so Terraform cannot see it change outside Terraform. Removing it removes the password.
+- `password` (String, Sensitive) The password visitors of a `password` page enter, 8 to 256 characters. Stored by Maple only as a hash, so Terraform cannot see it change outside Terraform. Unset removes the password, unless the page keeps `password` visibility set outside Terraform.
 - `privacy_url` (String) An https link to your privacy policy, shown in the footer.
 - `show_powered_by` (Boolean) Whether the page credits Maple. Defaults to `true`.
 - `support_url` (String) An https link to your support page, shown in the header.
