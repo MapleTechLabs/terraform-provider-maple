@@ -132,7 +132,10 @@ func (api *API) handleStatusPage(w http.ResponseWriter, r *http.Request, body ma
 			config: map[string]any{"visibility": "public", "components": []any{}},
 			draft:  body["publish"] == false,
 		}
-		api.applyConfig(id, page, body)
+		if status, message := api.applyConfig(id, page, body); status != 0 {
+			writeError(w, status, "invalid_request_error", message)
+			return
+		}
 		api.pages[id] = page
 		writeJSON(w, page.view(id))
 		return

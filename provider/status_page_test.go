@@ -8,9 +8,39 @@ import (
 
 	"github.com/MapleTechLabs/terraform-provider-maple/fakeapi"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/knownvalue"
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
+	"github.com/hashicorp/terraform-plugin-testing/tfjsonpath"
 )
+
+func TestStatusPageRejectsWhatTheAPIWouldRefuseMidApply(t *testing.T) {
+	api := fakeapi.New(t)
+	for name, tc := range map[string]struct{ body, err string }{
+		"internal with a domain": {`visibility = "internal"
+  custom_domain = "status.acme.test"`, `cannot have a custom domain`},
+		"duplicate names": {`components = [{ name = "API" }, { name = "API" }]`, `must be unique`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			resource.UnitTest(t, resource.TestCase{
+				ProtoV6ProviderFactories: factories,
+				Steps: []resource.TestStep{{
+					Config: providerBlock(api) + `
+resource "maple_status_page" "acme" {
+  name = "Acme Status"
+  slug = "acme-status"
+  ` + tc.body + `
+}
+`,
+					ExpectError: regexp.MustCompile(tc.err),
+				}},
+			})
+		})
+	}
+	if api.Count("POST", "/v2/status_pages") != 0 {
+		t.Fatal("a refused config must not reach the API")
+	}
+}
 
 func TestStatusPageRejectsUntrimmedNames(t *testing.T) {
 	api := fakeapi.New(t)
@@ -122,6 +152,10 @@ resource "maple_status_page" "acme" {
 						config["components"].([]any)[0].(map[string]any)["manual_status"] = "major_outage"
 					})
 				},
+				// The domain is unchanged, so its records stay known for a for_each over them.
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectKnownValue(page, tfjsonpath.New("custom_domain_dns_records"), knownvalue.ListSizeExact(2)),
+				}},
 				Config: strings.Replace(initial, `support_url   = "https://acme.test/support"`, `support_url   = "https://acme.test/help"`, 1),
 				Check: func(*terraform.State) error {
 					_, config, _ := api.StatusPage(pageID)

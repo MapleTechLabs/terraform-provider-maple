@@ -22,6 +22,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 )
@@ -34,9 +35,10 @@ type statusPageResource struct {
 }
 
 var (
-	_ resource.Resource                = (*statusPageResource)(nil)
-	_ resource.ResourceWithConfigure   = (*statusPageResource)(nil)
-	_ resource.ResourceWithImportState = (*statusPageResource)(nil)
+	_ resource.Resource                   = (*statusPageResource)(nil)
+	_ resource.ResourceWithConfigure      = (*statusPageResource)(nil)
+	_ resource.ResourceWithImportState    = (*statusPageResource)(nil)
+	_ resource.ResourceWithValidateConfig = (*statusPageResource)(nil)
 )
 
 func newStatusPageResource() resource.Resource { return &statusPageResource{} }
@@ -212,10 +214,15 @@ func (r *statusPageResource) Schema(_ context.Context, _ resource.SchemaRequest,
 				Optional:    true,
 				Description: "Also serve the page on this hostname, e.g. `status.acme.com`. Add the records in `custom_domain_dns_records` at your DNS provider. Removing it removes the domain.",
 			},
-			"custom_domain_cname_target": readOnlyString("The hostname to CNAME `custom_domain` to."),
+			"custom_domain_cname_target": schema.StringAttribute{
+				Computed:      true,
+				Description:   "The hostname to CNAME `custom_domain` to.",
+				PlanModifiers: []planmodifier.String{sameDomainKeepsState{}},
+			},
 			"custom_domain_dns_records": schema.ListNestedAttribute{
-				Computed:    true,
-				Description: "The DNS records `custom_domain` needs: the `routing` CNAME, and `ownership` and `certificate` TXT records while the domain is verified.",
+				Computed:      true,
+				PlanModifiers: []planmodifier.List{sameDomainKeepsState{}},
+				Description:   "The DNS records `custom_domain` needs: the `routing` CNAME, and `ownership` and `certificate` TXT records while the domain is verified.",
 				NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
 					"type":    schema.StringAttribute{Computed: true, Description: "`CNAME` or `TXT`."},
 					"name":    schema.StringAttribute{Computed: true, Description: "The record name."},
@@ -244,10 +251,11 @@ func pagePath(id string) string { return "/v2/status_pages/" + url.PathEscape(id
 func (r *statusPageResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan statusPageModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("visibility"), &plan.Visibility)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	// A draft, so no half-configured page is ever served; apply publishes it.
+	// A draft, so no half-configured page is ever served; published once configured.
 	page, err := r.client.Post(ctx, "/v2/status_pages", map[string]any{
 		"name": plan.Name.ValueString(), "slug": plan.Slug.ValueString(), "publish": false,
 	})
@@ -256,14 +264,28 @@ func (r *statusPageResource) Create(ctx context.Context, req resource.CreateRequ
 		return
 	}
 	id := fmt.Sprint(page["id"])
-	if err := r.apply(ctx, id, plan, nil); err != nil {
-		// Saved as tainted, so the next apply replaces the half-made page instead of orphaning it.
+	// Saved as tainted on any later failure, so the next apply replaces the half-made
+	// page instead of orphaning it on its slug.
+	tainted := func(summary, detail string) {
 		plan.ID = types.StringValue(id)
 		resp.Diagnostics.Append(resp.State.Set(ctx, nullUnknowns(plan))...)
-		resp.Diagnostics.AddError("Configuring status page "+id, err.Error())
+		resp.Diagnostics.AddError(summary, detail)
+	}
+	if _, err := r.apply(ctx, id, plan, nil); err != nil {
+		tainted("Configuring status page "+id, err.Error())
 		return
 	}
-	r.readInto(ctx, id, plan, &resp.State, &resp.Diagnostics)
+	if _, err := r.client.Post(ctx, pagePath(id)+"/publish", nil); err != nil {
+		tainted("Publishing status page "+id, err.Error())
+		return
+	}
+	var diags diag.Diagnostics
+	r.readInto(ctx, id, plan, false, &resp.State, &diags)
+	if diags.HasError() {
+		tainted("Reading status page "+id, fmt.Sprint(diags.Errors()))
+		return
+	}
+	resp.Diagnostics.Append(diags...)
 }
 
 func (r *statusPageResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -276,22 +298,30 @@ func (r *statusPageResource) Read(ctx context.Context, req resource.ReadRequest,
 		resp.State.RemoveResource(ctx)
 		return
 	}
-	r.readInto(ctx, prior.ID.ValueString(), prior, &resp.State, &resp.Diagnostics)
+	r.readInto(ctx, prior.ID.ValueString(), prior, false, &resp.State, &resp.Diagnostics)
 }
 
 func (r *statusPageResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan, prior statusPageModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	resp.Diagnostics.Append(req.State.Get(ctx, &prior)...)
+	// Sent only when configured: a value carried over from state could undo a change made since.
+	configured := plan
+	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("visibility"), &configured.Visibility)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 	id := prior.ID.ValueString()
-	if err := r.apply(ctx, id, plan, &prior); err != nil {
+	passwordSet, err := r.apply(ctx, id, configured, &prior)
+	if err != nil {
+		// State stays the prior one; a password already changed must not read as the old one.
+		if passwordSet {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("password"), plan.Password)...)
+		}
 		resp.Diagnostics.AddError("Updating status page "+id, err.Error())
 		return
 	}
-	r.readInto(ctx, id, plan, &resp.State, &resp.Diagnostics)
+	r.readInto(ctx, id, plan, true, &resp.State, &resp.Diagnostics)
 }
 
 func (r *statusPageResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -312,11 +342,12 @@ func (r *statusPageResource) ImportState(ctx context.Context, req resource.Impor
 // apply writes plan over the page in the order the API's rules need: a page can
 // only turn `password` once it has one, and only turn `internal` without a
 // custom domain.
-func (r *statusPageResource) apply(ctx context.Context, id string, plan statusPageModel, prior *statusPageModel) error {
+// It reports whether it changed the password, which state cannot read back.
+func (r *statusPageResource) apply(ctx context.Context, id string, plan statusPageModel, prior *statusPageModel) (passwordSet bool, err error) {
 	base := pagePath(id)
 	page, err := r.client.Get(ctx, base)
 	if err != nil {
-		return err
+		return false, err
 	}
 	hasPassword := page["has_password"] == true
 	priorPassword, priorDomain := types.StringNull(), types.StringNull()
@@ -326,16 +357,17 @@ func (r *statusPageResource) apply(ctx context.Context, id string, plan statusPa
 
 	if !plan.Password.IsNull() && (!hasPassword || !plan.Password.Equal(priorPassword)) {
 		if _, err := r.client.Put(ctx, base+"/password", map[string]any{"password": plan.Password.ValueString()}); err != nil {
-			return fmt.Errorf("setting the password: %w", err)
+			return false, fmt.Errorf("setting the password: %w", err)
 		}
+		passwordSet = true
 	}
 	domain, err := r.client.Get(ctx, base+"/custom_domain")
 	if err != nil {
-		return err
+		return passwordSet, err
 	}
 	if plan.CustomDomain.IsNull() && !priorDomain.IsNull() && domain["hostname"] != nil {
 		if err := r.client.Delete(ctx, base+"/custom_domain"); err != nil {
-			return fmt.Errorf("removing the custom domain: %w", err)
+			return passwordSet, fmt.Errorf("removing the custom domain: %w", err)
 		}
 	}
 
@@ -344,11 +376,11 @@ func (r *statusPageResource) apply(ctx context.Context, id string, plan statusPa
 	for attempt := 0; ; attempt++ {
 		current, err := r.client.Get(ctx, base+"/config")
 		if err != nil {
-			return err
+			return passwordSet, err
 		}
 		body, err := configBody(ctx, plan, current)
 		if err != nil {
-			return err
+			return passwordSet, err
 		}
 		_, err = r.client.Put(ctx, base+"/config?if_version="+url.QueryEscape(fmt.Sprint(current["version"])), body)
 		var apiErr *client.APIError
@@ -356,27 +388,22 @@ func (r *statusPageResource) apply(ctx context.Context, id string, plan statusPa
 			continue
 		}
 		if err != nil {
-			return fmt.Errorf("applying the config: %w", err)
+			return passwordSet, fmt.Errorf("applying the config: %w", err)
 		}
 		break
 	}
 
 	if !plan.CustomDomain.IsNull() && domain["hostname"] != plan.CustomDomain.ValueString() {
 		if _, err := r.client.Put(ctx, base+"/custom_domain", map[string]any{"hostname": plan.CustomDomain.ValueString()}); err != nil {
-			return fmt.Errorf("setting the custom domain: %w", err)
+			return passwordSet, fmt.Errorf("setting the custom domain: %w", err)
 		}
 	}
 	if plan.Password.IsNull() && !priorPassword.IsNull() && hasPassword {
 		if err := r.client.Delete(ctx, base+"/password"); err != nil {
-			return fmt.Errorf("removing the password: %w", err)
+			return passwordSet, fmt.Errorf("removing the password: %w", err)
 		}
 	}
-	if page["draft"] == true {
-		if _, err := r.client.Post(ctx, base+"/publish", nil); err != nil {
-			return fmt.Errorf("publishing: %w", err)
-		}
-	}
-	return nil
+	return passwordSet, nil
 }
 
 func optionalString(v types.String) any {
@@ -454,7 +481,7 @@ func configBody(ctx context.Context, plan statusPageModel, current client.Object
 // readInto writes the page as the API holds it. base is what the user asked for
 // (the plan, or prior state): the password is never returned, and a manual status
 // the user left unset stays unset.
-func (r *statusPageResource) readInto(ctx context.Context, id string, base statusPageModel, state interface {
+func (r *statusPageResource) readInto(ctx context.Context, id string, base statusPageModel, keepPlannedDomain bool, state interface {
 	Set(context.Context, any) diag.Diagnostics
 }, diags *diag.Diagnostics) {
 	pagePrefix := pagePath(id)
@@ -522,6 +549,13 @@ func (r *statusPageResource) readInto(ctx context.Context, id string, base statu
 		}))
 	}
 
+	cnameTarget := str(domain["cname_target"])
+	dnsRecords := types.ListValueMust(types.ObjectType{AttrTypes: dnsRecordAttrTypes}, records)
+	// An update that kept the domain planned its records from state; changes reach state on refresh.
+	if keepPlannedDomain && base.CustomDomain.Equal(str(domain["hostname"])) &&
+		!base.CustomDomainDNSRecords.IsUnknown() && !base.CustomDomainCNAMETarget.IsUnknown() {
+		cnameTarget, dnsRecords = base.CustomDomainCNAMETarget, base.CustomDomainDNSRecords
+	}
 	password := base.Password
 	if page["has_password"] != true || password.IsUnknown() {
 		password = types.StringNull()
@@ -545,8 +579,8 @@ func (r *statusPageResource) readInto(ctx context.Context, id string, base statu
 		Components:              types.ListValueMust(types.ObjectType{AttrTypes: componentAttrTypes}, components),
 		Password:                password,
 		CustomDomain:            str(domain["hostname"]),
-		CustomDomainCNAMETarget: str(domain["cname_target"]),
-		CustomDomainDNSRecords:  types.ListValueMust(types.ObjectType{AttrTypes: dnsRecordAttrTypes}, records),
+		CustomDomainCNAMETarget: cnameTarget,
+		CustomDomainDNSRecords:  dnsRecords,
 	})...)
 }
 
@@ -563,4 +597,70 @@ func nullUnknowns(m statusPageModel) statusPageModel {
 	}
 	m.Components = types.ListNull(types.ObjectType{AttrTypes: componentAttrTypes})
 	return m
+}
+
+// ValidateConfig refuses what the API would refuse half way through an apply.
+func (r *statusPageResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var config statusPageModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if config.Visibility.ValueString() == "internal" && !config.CustomDomain.IsNull() {
+		resp.Diagnostics.AddAttributeError(path.Root("custom_domain"), "Custom domain on an internal page",
+			"An internal page is served on no address, so it cannot have a custom domain. Remove custom_domain or change visibility.")
+	}
+	if config.Components.IsNull() || config.Components.IsUnknown() {
+		return
+	}
+	var components []statusPageComponentModel
+	resp.Diagnostics.Append(config.Components.ElementsAs(ctx, &components, false)...)
+	seen := map[string]bool{}
+	for i, c := range components {
+		if c.Name.IsUnknown() {
+			continue
+		}
+		// Components are matched to the page's by name, so a name must be unique.
+		if seen[c.Name.ValueString()] {
+			resp.Diagnostics.AddAttributeError(path.Root("components").AtListIndex(i).AtName("name"), "Duplicate component name",
+				"Component names must be unique on a page: "+c.Name.ValueString())
+		}
+		seen[c.Name.ValueString()] = true
+	}
+}
+
+// sameDomainKeepsState keeps the custom domain's DNS records known in a plan that
+// does not change the domain, so resources that iterate over them can still plan.
+type sameDomainKeepsState struct{}
+
+func (sameDomainKeepsState) Description(context.Context) string {
+	return "Keeps the prior value while custom_domain is unchanged."
+}
+
+func (m sameDomainKeepsState) MarkdownDescription(ctx context.Context) string {
+	return m.Description(ctx)
+}
+
+func (sameDomainKeepsState) unchanged(ctx context.Context, plan tfsdk.Plan, state tfsdk.State) bool {
+	if state.Raw.IsNull() || plan.Raw.IsNull() {
+		return false
+	}
+	var planned, prior types.String
+	if plan.GetAttribute(ctx, path.Root("custom_domain"), &planned).HasError() ||
+		state.GetAttribute(ctx, path.Root("custom_domain"), &prior).HasError() {
+		return false
+	}
+	return !planned.IsUnknown() && planned.Equal(prior)
+}
+
+func (m sameDomainKeepsState) PlanModifyString(ctx context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
+	if req.PlanValue.IsUnknown() && m.unchanged(ctx, req.Plan, req.State) {
+		resp.PlanValue = req.StateValue
+	}
+}
+
+func (m sameDomainKeepsState) PlanModifyList(ctx context.Context, req planmodifier.ListRequest, resp *planmodifier.ListResponse) {
+	if req.PlanValue.IsUnknown() && m.unchanged(ctx, req.Plan, req.State) {
+		resp.PlanValue = req.StateValue
+	}
 }

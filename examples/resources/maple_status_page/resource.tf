@@ -22,8 +22,9 @@ resource "maple_status_page" "acme" {
   custom_domain = "status.acme.example"
 }
 
-# The DNS records the custom domain needs, here at Cloudflare. Their values are
-# known once the page exists: on the first run, apply the page with -target first.
+# The DNS records the custom domain needs, here at Cloudflare. They are known once
+# the domain is set and stay known while it is unchanged; when you add or change
+# custom_domain, apply the page with -target first.
 resource "cloudflare_dns_record" "status" {
   for_each = { for r in maple_status_page.acme.custom_domain_dns_records : "${r.type}:${r.name}" => r }
 
