@@ -136,8 +136,7 @@ func (r *statusPageResource) Schema(_ context.Context, _ resource.SchemaRequest,
 	image := "An https URL, or an uploaded image as a base64 `data:image/...` URL of at most 128 KB, e.g. `\"data:image/png;base64,${filebase64(\"logo.png\")}\"`."
 	resp.Schema = schema.Schema{
 		Description: "A public status page: its settings, theme, components, visibility, password and custom domain. " +
-			"Incidents are operational and not managed here. Needs an API key with the `status_pages:write` scope; " +
-			"`visibility` and `password` also need an org admin.",
+			"Incidents are operational and not managed here. Needs an API key with the `status_pages:write` scope.",
 		Attributes: map[string]schema.Attribute{
 			"id":            idAttribute("stp"),
 			"name":          schema.StringAttribute{Required: true, Description: "Shown as the page title.", Validators: trimmed},
@@ -158,7 +157,7 @@ func (r *statusPageResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			"visibility": schema.StringAttribute{
 				Optional: true, Computed: true,
 				Description: "Who can read the page: `public`, `password` (needs `password`) or `internal` (only your organization's members, in Maple; incompatible with `custom_domain`). " +
-					"Unset keeps the page's visibility, `public` for a new page. Changing it needs an org admin.",
+					"Unset keeps the page's visibility, `public` for a new page.",
 				// No UseStateForUnknown: a change made in Maple between plan and apply must not
 				// read as an inconsistent result.
 				Validators: oneOf("public", "password", "internal"),
@@ -207,7 +206,7 @@ func (r *statusPageResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			},
 			"password": schema.StringAttribute{
 				Optional: true, Sensitive: true,
-				Description: "The password visitors of a `password` page enter, 8 to 128 characters. Stored by Maple only as a hash, so Terraform cannot see it change outside Terraform. Removing it removes the password. Needs an org admin.",
+				Description: "The password visitors of a `password` page enter, 8 to 128 characters. Stored by Maple only as a hash, so Terraform cannot see it change outside Terraform. Removing it removes the password.",
 				Validators:  []validator.String{stringvalidator.LengthBetween(8, 128)},
 			},
 			"custom_domain": schema.StringAttribute{

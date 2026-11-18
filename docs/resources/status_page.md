@@ -3,12 +3,12 @@
 page_title: "maple_status_page Resource - maple"
 subcategory: ""
 description: |-
-  A public status page: its settings, theme, components, visibility, password and custom domain. Incidents are operational and not managed here. Needs an API key with the status_pages:write scope; visibility and password also need an org admin.
+  A public status page: its settings, theme, components, visibility, password and custom domain. Incidents are operational and not managed here. Needs an API key with the status_pages:write scope.
 ---
 
 # maple_status_page (Resource)
 
-A public status page: its settings, theme, components, visibility, password and custom domain. Incidents are operational and not managed here. Needs an API key with the `status_pages:write` scope; `visibility` and `password` also need an org admin.
+A public status page: its settings, theme, components, visibility, password and custom domain. Incidents are operational and not managed here. Needs an API key with the `status_pages:write` scope.
 
 ## Example Usage
 
@@ -68,13 +68,13 @@ resource "cloudflare_dns_record" "status" {
 - `favicon_url` (String) The browser tab icon. An https URL, or an uploaded image as a base64 `data:image/...` URL of at most 128 KB, e.g. `"data:image/png;base64,${filebase64("logo.png")}"`.
 - `logo_dark_url` (String) A logo shown in dark mode instead of `logo_url`. An https URL, or an uploaded image as a base64 `data:image/...` URL of at most 128 KB, e.g. `"data:image/png;base64,${filebase64("logo.png")}"`.
 - `logo_url` (String) The logo. An https URL, or an uploaded image as a base64 `data:image/...` URL of at most 128 KB, e.g. `"data:image/png;base64,${filebase64("logo.png")}"`.
-- `password` (String, Sensitive) The password visitors of a `password` page enter, 8 to 128 characters. Stored by Maple only as a hash, so Terraform cannot see it change outside Terraform. Removing it removes the password. Needs an org admin.
+- `password` (String, Sensitive) The password visitors of a `password` page enter, 8 to 128 characters. Stored by Maple only as a hash, so Terraform cannot see it change outside Terraform. Removing it removes the password.
 - `privacy_url` (String) An https link to your privacy policy, shown in the footer.
 - `show_powered_by` (Boolean) Whether the page credits Maple. Defaults to `true`.
 - `support_url` (String) An https link to your support page, shown in the header.
 - `terms_url` (String) An https link to your terms of service, shown in the footer.
 - `theme` (Attributes) How the page looks. Unset fields take the default theme's value. Text must reach a WCAG AA contrast of 4.5:1. (see [below for nested schema](#nestedatt--theme))
-- `visibility` (String) Who can read the page: `public`, `password` (needs `password`) or `internal` (only your organization's members, in Maple; incompatible with `custom_domain`). Unset keeps the page's visibility, `public` for a new page. Changing it needs an org admin.
+- `visibility` (String) Who can read the page: `public`, `password` (needs `password`) or `internal` (only your organization's members, in Maple; incompatible with `custom_domain`). Unset keeps the page's visibility, `public` for a new page.
 - `website_url` (String) Your site, linked from the page.
 
 ### Read-Only
