@@ -61,7 +61,7 @@ func (p *mapleProvider) Metadata(_ context.Context, _ provider.MetadataRequest, 
 
 func (p *mapleProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manage Maple dashboards, alerts, uptime monitors, scrape targets and API keys through the public v2 API.",
+		Description: "Manage Maple dashboards, alerts, uptime monitors, status pages, scrape targets and API keys through the public v2 API.",
 		Attributes: map[string]schema.Attribute{
 			"api_key": schema.StringAttribute{
 				Optional:  true,
@@ -119,6 +119,7 @@ func (p *mapleProvider) Resources(_ context.Context) []func() resource.Resource 
 		newResource(apiKeyDef(p.options.rotateReplaces)),
 		newResource(dashboardDef()),
 		newResource(scrapeTargetDef()),
+		newStatusPageResource,
 		newResource(uptimeMonitorDef()),
 	}
 }

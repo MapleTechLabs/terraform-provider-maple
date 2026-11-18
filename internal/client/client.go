@@ -76,6 +76,10 @@ func (c *Client) Patch(ctx context.Context, path string, body any) (Object, erro
 	return c.do(ctx, http.MethodPatch, path, body)
 }
 
+func (c *Client) Put(ctx context.Context, path string, body any) (Object, error) {
+	return c.do(ctx, http.MethodPut, path, body)
+}
+
 func (c *Client) Delete(ctx context.Context, path string) error {
 	_, err := c.do(ctx, http.MethodDelete, path, nil)
 	return err

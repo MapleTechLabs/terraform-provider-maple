@@ -1,0 +1,138 @@
+package provider
+
+import (
+	"fmt"
+	"regexp"
+	"testing"
+
+	"github.com/MapleTechLabs/terraform-provider-maple/fakeapi"
+	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
+)
+
+func TestStatusPageLifecycle(t *testing.T) {
+	api := fakeapi.New(t)
+	const page = "maple_status_page.acme"
+	monitor := `
+resource "maple_uptime_monitor" "api" {
+  name   = "API"
+  config = jsonencode({ type = "http", url = "https://api.acme.test/health" })
+}
+`
+	initial := providerBlock(api) + monitor + `
+resource "maple_status_page" "acme" {
+  name          = "Acme Status"
+  slug          = "acme-status"
+  support_url   = "https://acme.test/support"
+  visibility    = "password"
+  password      = "correct horse battery"
+  custom_domain = "status.acme.test"
+  theme         = { preset = "midnight", accent = "#a5b4fc" }
+  components = [
+    { name = "API", monitor_id = maple_uptime_monitor.api.id },
+    { name = "Docs", group = "Websites", show_uptime = false },
+  ]
+}
+`
+	internal := providerBlock(api) + monitor + `
+resource "maple_status_page" "acme" {
+  name        = "Acme Status"
+  slug        = "acme-status"
+  support_url = "https://acme.test/support"
+  visibility  = "internal"
+  components = [
+    { name = "Status API" },
+    { name = "API", monitor_id = maple_uptime_monitor.api.id },
+  ]
+}
+`
+	var pageID, apiComponentID string
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config: initial,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestMatchResourceAttr(page, "id", regexp.MustCompile(`^stp_`)),
+					captureID(page, &pageID),
+					captureAttr(page, "components.0.id", &apiComponentID),
+					resource.TestCheckResourceAttr(page, "visibility", "password"),
+					resource.TestCheckResourceAttr(page, "theme.font", "sans"),
+					resource.TestCheckResourceAttr(page, "show_powered_by", "true"),
+					resource.TestCheckResourceAttr(page, "components.0.show_uptime", "true"),
+					resource.TestCheckResourceAttrPair(page, "components.0.monitor_id", "maple_uptime_monitor.api", "id"),
+					resource.TestCheckResourceAttr(page, "custom_domain_dns_records.#", "2"),
+					resource.TestCheckResourceAttr(page, "custom_domain_dns_records.0.type", "CNAME"),
+					func(*terraform.State) error {
+						view, _, hostname := api.StatusPage(pageID)
+						if view["draft"] != false || view["has_password"] != true || hostname != "status.acme.test" {
+							return fmt.Errorf("page not published with its password and domain: %v %v", view, hostname)
+						}
+						return nil
+					},
+				),
+			},
+			{
+				// A responder flips a component during an incident: not drift.
+				PreConfig: func() {
+					api.MutateStatusPage(pageID, func(config map[string]any) {
+						config["components"].([]any)[0].(map[string]any)["manual_status"] = "degraded"
+					})
+				},
+				Config:           initial,
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()}},
+			},
+			{
+				// A theme edited in the UI is drift and is put back.
+				PreConfig: func() {
+					api.MutateStatusPage(pageID, func(config map[string]any) {
+						config["theme"].(map[string]any)["font"] = "serif"
+					})
+				},
+				Config: initial,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction(page, plancheck.ResourceActionUpdate)},
+				},
+				Check: resource.TestCheckResourceAttr(page, "theme.font", "sans"),
+			},
+			{
+				// Internal needs the domain gone first; the password goes after the config.
+				Config: internal,
+				Check: resource.ComposeTestCheckFunc(
+					sameID(page, &pageID),
+					resource.TestCheckResourceAttr(page, "components.#", "2"),
+					resource.TestCheckResourceAttr(page, "components.0.name", "Status API"),
+					resource.TestCheckResourceAttrPtr(page, "components.1.id", &apiComponentID),
+					resource.TestCheckNoResourceAttr(page, "custom_domain"),
+					resource.TestCheckResourceAttr(page, "custom_domain_dns_records.#", "0"),
+					resource.TestCheckResourceAttr(page, "theme.preset", "default"),
+					func(*terraform.State) error {
+						view, config, hostname := api.StatusPage(pageID)
+						if view["visibility"] != "internal" || view["has_password"] != false || hostname != nil {
+							return fmt.Errorf("page not internal without password and domain: %v %v", view, hostname)
+						}
+						api := config["components"].([]any)[1].(map[string]any)
+						if api["manual_status"] != "degraded" {
+							return fmt.Errorf("the responder's manual status was overwritten: %v", api)
+						}
+						return nil
+					},
+				),
+			},
+			{
+				ResourceName:      page,
+				ImportState:       true,
+				ImportStateVerify: true,
+				// The override was set outside Terraform; the import reads it as Maple holds it.
+				ImportStateVerifyIgnore: []string{"components.1.manual_status"},
+			},
+		},
+		CheckDestroy: func(*terraform.State) error {
+			if view, _, _ := api.StatusPage(pageID); view != nil {
+				return fmt.Errorf("status page %s still exists", pageID)
+			}
+			return nil
+		},
+	})
+}

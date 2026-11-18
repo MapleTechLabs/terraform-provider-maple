@@ -1,7 +1,7 @@
 # Terraform provider for Maple
 
-Manage Maple dashboards, alert rules, alert destinations, uptime monitors, scrape targets and API keys
-as Terraform resources, through the public [v2 API](https://api.maple.dev/v2/docs).
+Manage Maple dashboards, alert rules, alert destinations, uptime monitors, status pages, scrape targets
+and API keys as Terraform resources, through the public [v2 API](https://api.maple.dev/v2/docs).
 
 User docs: [maple.dev/docs/iac/terraform](https://maple.dev/docs/iac/terraform). Registry docs are
 generated into [`docs/`](docs) from the schema descriptions and [`examples/`](examples).
@@ -12,6 +12,7 @@ generated into [`docs/`](docs) from the schema descriptions and [`examples/`](ex
 | `maple_alert_destination`  | `/v2/alerts/destinations` |
 | `maple_alert_rule`         | `/v2/alerts/rules`        |
 | `maple_uptime_monitor`     | `/v2/uptime_monitors`     |
+| `maple_status_page`        | `/v2/status_pages`        |
 | `maple_scrape_target`      | `/v2/scrape_targets`      |
 | `maple_api_key`            | `/v2/api_keys`            |
 | `maple_ingest_keys` (data) | `/v2/ingest_keys`         |
@@ -22,6 +23,10 @@ Every resource is one `resourceDef` in [`provider/resources.go`](provider/resour
 a schema, its v2 collection path and a few per-attribute flags. [`generic_resource.go`](provider/generic_resource.go)
 does the CRUD for all of them: attribute names are the API's snake_case wire names, so the plan is sent
 as the request body and the response is read back into state.
+
+`maple_status_page` is the exception, in [`status_page_resource.go`](provider/status_page_resource.go):
+one page spans its config document, password and custom domain endpoints, written in the order the API
+requires.
 
 - **JSON documents** (dashboard widgets, uptime `config`, alert `thresholds`) are strings written with
   `jsonencode`. State keeps the user's string while the API's object still contains everything it says,

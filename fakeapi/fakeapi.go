@@ -36,6 +36,7 @@ type API struct {
 	collections map[string]collection
 	objects     map[string]map[string]any // path → object
 	next        int
+	pages       map[string]*statusPage
 	requests    []request
 	server      *httptest.Server
 }
@@ -45,6 +46,7 @@ type API struct {
 func New(t testing.TB) *API {
 	api := &API{
 		objects: map[string]map[string]any{},
+		pages:   map[string]*statusPage{},
 		collections: map[string]collection{
 			"/v2/dashboards": {prefix: "dash", defaults: map[string]any{
 				"description": nil, "tags": []any{}, "widgets": []any{}, "sections": []any{}, "variables": []any{},
@@ -117,6 +119,10 @@ func (api *API) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	api.requests = append(api.requests, request{Method: r.Method, Path: r.URL.Path, Body: body, UserAgent: r.UserAgent()})
 
+	if r.URL.Path == "/v2/status_pages" || strings.HasPrefix(r.URL.Path, "/v2/status_pages/") {
+		api.handleStatusPage(w, r, body)
+		return
+	}
 	if r.URL.Path == "/v2/ingest_keys" && r.Method == http.MethodGet {
 		writeJSON(w, map[string]any{
 			"object": "ingest_keys", "public_key": "maple_pk_test", "private_key": "maple_sk_test",
