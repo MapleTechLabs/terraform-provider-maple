@@ -272,3 +272,21 @@ resource "maple_status_page" "acme" {
 		}},
 	})
 }
+
+func TestStatusPageKeepsTextEndingInANextLine(t *testing.T) {
+	api := fakeapi.New(t)
+	// U+0085 is whitespace to Go but not to JavaScript's trim, so the API keeps it.
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{{
+			Config: providerBlock(api) + `
+resource "maple_status_page" "acme" {
+  name        = "Acme Status"
+  slug        = "acme-status"
+  description = "Our status\u0085"
+}
+`,
+			Check: resource.TestCheckResourceAttr("maple_status_page.acme", "description", "Our status\u0085"),
+		}},
+	})
+}

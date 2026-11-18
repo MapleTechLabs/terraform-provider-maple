@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"unicode"
 )
 
 // statusPage mirrors a v2 status page: its config document, password, custom
@@ -52,9 +53,14 @@ func (p *statusPage) withVersion() map[string]any {
 	return out
 }
 
+// jsTrim trims what JavaScript's trim does: Go's whitespace without U+0085, plus U+FEFF.
+func jsTrim(s string) string {
+	return strings.TrimFunc(s, func(r rune) bool { return (unicode.IsSpace(r) && r != 0x85) || r == 0xFEFF })
+}
+
 func textOrNull(v any) any {
-	if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
-		return strings.TrimSpace(s)
+	if s, ok := v.(string); ok && jsTrim(s) != "" {
+		return jsTrim(s)
 	}
 	return nil
 }
@@ -191,7 +197,7 @@ func (api *API) handleStatusPage(w http.ResponseWriter, r *http.Request, body ma
 			return
 		}
 		// As the API: trimmed, lowercased, without a trailing dot.
-		page.hostname = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(fmt.Sprint(body["hostname"]))), ".")
+		page.hostname = strings.TrimSuffix(strings.ToLower(jsTrim(fmt.Sprint(body["hostname"]))), ".")
 		writeJSON(w, page.domain(id))
 	case "DELETE custom_domain":
 		if page.hostname == nil {
