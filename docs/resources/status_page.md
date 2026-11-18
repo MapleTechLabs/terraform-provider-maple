@@ -57,7 +57,7 @@ resource "cloudflare_dns_record" "status" {
 ### Required
 
 - `name` (String) Shown as the page title.
-- `slug` (String) The page's address, `<slug>.<status domain>`: 3 to 48 lowercase letters, digits or inner hyphens. Unique across Maple.
+- `slug` (String) The page's address, `/s/<org key>/<slug>` on the status domain: 3 to 48 lowercase letters, digits or inner hyphens. Unique within the organization.
 
 ### Optional
 

@@ -145,7 +145,7 @@ func (r *statusPageResource) Schema(_ context.Context, _ resource.SchemaRequest,
 		Attributes: map[string]schema.Attribute{
 			"id":            idAttribute("stp"),
 			"name":          schema.StringAttribute{Required: true, Description: "Shown as the page title.", Validators: trimmed},
-			"slug":          schema.StringAttribute{Required: true, Description: "The page's address, `<slug>.<status domain>`: 3 to 48 lowercase letters, digits or inner hyphens. Unique across Maple."},
+			"slug":          schema.StringAttribute{Required: true, Description: "The page's address, `/s/<org key>/<slug>` on the status domain: 3 to 48 lowercase letters, digits or inner hyphens. Unique within the organization."},
 			"description":   optionalText("Text under the title."),
 			"website_url":   optionalText("Your site, linked from the page."),
 			"logo_url":      optionalText("The logo. " + image),
