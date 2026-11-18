@@ -94,7 +94,7 @@ const maxAttempts = 6
 
 func (c *Client) do(ctx context.Context, method, path string, body any) (Object, error) {
 	// Only idempotent methods retry on their own; a retried POST could create twice.
-	return c.send(ctx, method, path, body, method == http.MethodGet || method == http.MethodDelete)
+	return c.send(ctx, method, path, body, method == http.MethodGet || method == http.MethodPut || method == http.MethodDelete)
 }
 
 func (c *Client) send(ctx context.Context, method, path string, body any, idempotent bool) (Object, error) {

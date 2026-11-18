@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"unicode/utf16"
 
 	"github.com/MapleTechLabs/terraform-provider-maple/internal/client"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
@@ -106,7 +107,8 @@ var (
 	defaultTheme = map[string]string{"preset": "default", "appearance": "auto", "radius": "md", "font": "sans"}
 	hexColor     = regexp.MustCompile(`^#[0-9a-f]{6}$`)
 	// The API trims names; a name it would change could never match its state.
-	trimmed = []validator.String{stringvalidator.RegexMatches(regexp.MustCompile(`(?s)^\S(.*\S)?$`), "must not start or end with whitespace")}
+	// Whitespace as JavaScript's trim sees it, which Go's \s (ASCII only) is not.
+	trimmed = []validator.String{stringvalidator.RegexMatches(regexp.MustCompile(`(?s)^[^\s\v\p{Z}\x{FEFF}](.*[^\s\v\p{Z}\x{FEFF}])?$`), "must not start or end with whitespace")}
 	// The API lowercases a hostname and drops a trailing dot; one it would change could never match its state.
 	hostname = []validator.String{stringvalidator.RegexMatches(regexp.MustCompile(`^[^A-Z\s]*[^A-Z\s.]$`), "must be lowercase, without surrounding whitespace or a trailing dot")}
 )
@@ -211,7 +213,7 @@ func (r *statusPageResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			"password": schema.StringAttribute{
 				Optional: true, Sensitive: true,
 				Description: "The password visitors of a `password` page enter, 8 to 256 characters. Stored by Maple only as a hash, so Terraform cannot see it change outside Terraform. Unset removes the password, unless the page keeps `password` visibility set outside Terraform.",
-				Validators:  []validator.String{stringvalidator.UTF8LengthBetween(8, 256)},
+				Validators:  []validator.String{utf16LengthBetween{8, 256}},
 			},
 			"custom_domain": schema.StringAttribute{
 				Optional:    true,
@@ -686,11 +688,19 @@ func (m sameDomainKeepsState) PlanModifyList(ctx context.Context, req planmodifi
 // ModifyPlan refuses removing the password Terraform set while the page stays
 // password-protected, which the API refuses after the config is already written.
 func (r *statusPageResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
-	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
+	if req.Plan.Raw.IsNull() {
 		return
 	}
 	var configured, prior statusPageModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &configured)...)
+	if req.State.Raw.IsNull() {
+		// A new page has no password but the configured one.
+		if configured.Visibility.ValueString() == "password" && configured.Password.IsNull() {
+			resp.Diagnostics.AddAttributeError(path.Root("password"), "Password page without a password",
+				"Set password, or choose another visibility.")
+		}
+		return
+	}
 	resp.Diagnostics.Append(req.State.Get(ctx, &prior)...)
 	if resp.Diagnostics.HasError() || !configured.Password.IsNull() || prior.Password.IsNull() {
 		return
@@ -741,4 +751,24 @@ func (componentIDsKeepState) PlanModifyList(ctx context.Context, req planmodifie
 	list, diags := types.ListValueFrom(ctx, types.ObjectType{AttrTypes: componentAttrTypes}, planned)
 	resp.Diagnostics.Append(diags...)
 	resp.PlanValue = list
+}
+
+// utf16LengthBetween counts a string as the API does, in UTF-16 code units.
+type utf16LengthBetween struct{ min, max int }
+
+func (v utf16LengthBetween) Description(context.Context) string {
+	return fmt.Sprintf("must be %d to %d characters", v.min, v.max)
+}
+
+func (v utf16LengthBetween) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (v utf16LengthBetween) ValidateString(ctx context.Context, req validator.StringRequest, resp *validator.StringResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	if n := len(utf16.Encode([]rune(req.ConfigValue.ValueString()))); n < v.min || n > v.max {
+		resp.Diagnostics.AddAttributeError(req.Path, "Invalid length", v.Description(ctx)+fmt.Sprintf(", got %d", n))
+	}
 }

@@ -21,9 +21,12 @@ func TestStatusPageRejectsWhatTheAPIWouldRefuseMidApply(t *testing.T) {
   custom_domain = "status.acme.test"`, `cannot have a custom domain`},
 		"duplicate names": {`components = [{ name = "API" }, { name = "API" }]`, `must be unique`},
 		// The API normalizes these, so state could never match the config.
-		"uppercase domain":       {`custom_domain = "Status.Acme.test"`, `must be lowercase`},
-		"domain trailing dot":    {`custom_domain = "status.acme.test."`, `must be lowercase`},
-		"description whitespace": {"description = \"Our status\\n\"", `must not start or end with whitespace`},
+		"uppercase domain":        {`custom_domain = "Status.Acme.test"`, `must be lowercase`},
+		"domain trailing dot":     {`custom_domain = "status.acme.test."`, `must be lowercase`},
+		"description whitespace":  {"description = \"Our status\\n\"", `must not start or end with whitespace`},
+		"name with a nbsp":        {"components = [{ name = \"API\\u00a0\" }]", `must not start or end with whitespace`},
+		"password page, none":     {`visibility = "password"`, `Password page without a password`},
+		"emoji password too long": {`password = "${join("", [for i in range(200) : "😀"])}"`, `must be 8 to 256 characters`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			resource.UnitTest(t, resource.TestCase{
