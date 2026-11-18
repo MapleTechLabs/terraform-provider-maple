@@ -251,3 +251,24 @@ resource "maple_status_page" "acme" {
 		},
 	})
 }
+
+func TestStatusPageAcceptsComponentNamesKnownOnlyAtApply(t *testing.T) {
+	api := fakeapi.New(t)
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{{
+			Config: providerBlock(api) + `
+resource "terraform_data" "component" {
+  input = "API"
+}
+
+resource "maple_status_page" "acme" {
+  name       = "Acme Status"
+  slug       = "acme-status"
+  components = [{ name = terraform_data.component.output }]
+}
+`,
+			Check: resource.TestCheckResourceAttr("maple_status_page.acme", "components.0.name", "API"),
+		}},
+	})
+}

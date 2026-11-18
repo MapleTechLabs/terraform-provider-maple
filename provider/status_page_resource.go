@@ -383,8 +383,9 @@ func (r *statusPageResource) apply(ctx context.Context, id string, plan statusPa
 
 	// Conditional on the version read, so a manual status a responder sets meanwhile
 	// is not overwritten with the one read: a conflict reads the config again.
+	var current client.Object
 	for attempt := 0; ; attempt++ {
-		current, err := r.client.Get(ctx, base+"/config")
+		current, err = r.client.Get(ctx, base+"/config")
 		if err != nil {
 			return passwordSet, err
 		}
@@ -410,9 +411,10 @@ func (r *statusPageResource) apply(ctx context.Context, id string, plan statusPa
 	}
 	// Unset removes the password, unless the page stays password-protected: then it
 	// was set outside Terraform (ModifyPlan refuses removing one Terraform set).
+	// From the config the write was conditional on, so a change made since the first read counts.
 	visibility := plan.Visibility.ValueString()
 	if plan.Visibility.IsNull() || plan.Visibility.IsUnknown() {
-		visibility = fmt.Sprint(page["visibility"])
+		visibility = fmt.Sprint(current["visibility"])
 	}
 	if plan.Password.IsNull() && hasPassword && visibility != "password" {
 		if err := r.client.Delete(ctx, base+"/password"); err != nil {
@@ -633,10 +635,15 @@ func (r *statusPageResource) ValidateConfig(ctx context.Context, req resource.Va
 	if config.Components.IsNull() || config.Components.IsUnknown() {
 		return
 	}
-	var components []statusPageComponentModel
-	resp.Diagnostics.Append(config.Components.ElementsAs(ctx, &components, false)...)
 	seen := map[string]bool{}
-	for i, c := range components {
+	for i, element := range config.Components.Elements() {
+		// A component built from another resource's output may be unknown until apply.
+		object, ok := element.(types.Object)
+		if !ok || object.IsNull() || object.IsUnknown() {
+			continue
+		}
+		var c statusPageComponentModel
+		resp.Diagnostics.Append(object.As(ctx, &c, basetypes.ObjectAsOptions{})...)
 		if c.Name.IsUnknown() {
 			continue
 		}
