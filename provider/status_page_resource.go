@@ -110,7 +110,7 @@ var (
 	// Whitespace as JavaScript's trim sees it, which Go's \s (ASCII only) is not.
 	trimmed = []validator.String{stringvalidator.RegexMatches(regexp.MustCompile(`(?s)^[^\s\v\p{Z}\x{FEFF}](.*[^\s\v\p{Z}\x{FEFF}])?$`), "must not start or end with whitespace")}
 	// The API lowercases a hostname and drops a trailing dot; one it would change could never match its state.
-	hostname = []validator.String{stringvalidator.RegexMatches(regexp.MustCompile(`^[^A-Z\s]*[^A-Z\s.]$`), "must be lowercase, without surrounding whitespace or a trailing dot")}
+	hostname = []validator.String{stringvalidator.RegexMatches(regexp.MustCompile(`^[^A-Z\s\v\p{Z}\x{FEFF}]*[^A-Z\s\v\p{Z}\x{FEFF}.]$`), "must be lowercase, without surrounding whitespace or a trailing dot")}
 )
 
 func (r *statusPageResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
