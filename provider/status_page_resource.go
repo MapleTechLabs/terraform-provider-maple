@@ -206,8 +206,8 @@ func (r *statusPageResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			},
 			"password": schema.StringAttribute{
 				Optional: true, Sensitive: true,
-				Description: "The password visitors of a `password` page enter, 8 to 128 characters. Stored by Maple only as a hash, so Terraform cannot see it change outside Terraform. Removing it removes the password.",
-				Validators:  []validator.String{stringvalidator.LengthBetween(8, 128)},
+				Description: "The password visitors of a `password` page enter, 8 to 256 characters. Stored by Maple only as a hash, so Terraform cannot see it change outside Terraform. Removing it removes the password.",
+				Validators:  []validator.String{stringvalidator.LengthBetween(8, 256)},
 			},
 			"custom_domain": schema.StringAttribute{
 				Optional:    true,
