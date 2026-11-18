@@ -313,15 +313,17 @@ func (r *statusPageResource) Update(ctx context.Context, req resource.UpdateRequ
 	}
 	id := prior.ID.ValueString()
 	passwordSet, err := r.apply(ctx, id, configured, &prior)
-	if err != nil {
-		// State stays the prior one; a password already changed must not read as the old one.
-		if passwordSet {
-			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("password"), plan.Password)...)
-		}
-		resp.Diagnostics.AddError("Updating status page "+id, err.Error())
-		return
+	var diags diag.Diagnostics
+	if err == nil {
+		r.readInto(ctx, id, plan, true, &resp.State, &diags)
+	} else {
+		diags.AddError("Updating status page "+id, err.Error())
 	}
-	r.readInto(ctx, id, plan, true, &resp.State, &resp.Diagnostics)
+	// On failure state stays the prior one; a password already changed must not read as the old one.
+	if diags.HasError() && passwordSet {
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("password"), plan.Password)...)
+	}
+	resp.Diagnostics.Append(diags...)
 }
 
 func (r *statusPageResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
