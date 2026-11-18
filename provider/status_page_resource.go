@@ -20,7 +20,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/objectdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -160,8 +159,9 @@ func (r *statusPageResource) Schema(_ context.Context, _ resource.SchemaRequest,
 				Optional: true, Computed: true,
 				Description: "Who can read the page: `public`, `password` (needs `password`) or `internal` (only your organization's members, in Maple; incompatible with `custom_domain`). " +
 					"Unset keeps the page's visibility, `public` for a new page. Changing it needs an org admin.",
-				Validators:    oneOf("public", "password", "internal"),
-				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+				// No UseStateForUnknown: a change made in Maple between plan and apply must not
+				// read as an inconsistent result.
+				Validators: oneOf("public", "password", "internal"),
 			},
 			"theme": schema.SingleNestedAttribute{
 				Optional: true, Computed: true,
@@ -608,7 +608,8 @@ func (r *statusPageResource) ValidateConfig(ctx context.Context, req resource.Va
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if config.Visibility.ValueString() == "internal" && !config.CustomDomain.IsNull() {
+	// An unknown domain is left to the API: it may still resolve to null.
+	if config.Visibility.ValueString() == "internal" && !config.CustomDomain.IsNull() && !config.CustomDomain.IsUnknown() {
 		resp.Diagnostics.AddAttributeError(path.Root("custom_domain"), "Custom domain on an internal page",
 			"An internal page is served on no address, so it cannot have a custom domain. Remove custom_domain or change visibility.")
 	}
