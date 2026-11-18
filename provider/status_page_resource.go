@@ -2,7 +2,9 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 
@@ -101,6 +103,8 @@ var (
 	// The API's default theme; an unset theme field takes its value.
 	defaultTheme = map[string]string{"preset": "default", "appearance": "auto", "radius": "md", "font": "sans"}
 	hexColor     = regexp.MustCompile(`^#[0-9a-f]{6}$`)
+	// The API trims names; a name it would change could never match its state.
+	trimmed = []validator.String{stringvalidator.RegexMatches(regexp.MustCompile(`^\S(.*\S)?$`), "must not start or end with whitespace")}
 )
 
 func (r *statusPageResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -135,7 +139,7 @@ func (r *statusPageResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			"`visibility` and `password` also need an org admin.",
 		Attributes: map[string]schema.Attribute{
 			"id":            idAttribute("stp"),
-			"name":          schema.StringAttribute{Required: true, Description: "Shown as the page title."},
+			"name":          schema.StringAttribute{Required: true, Description: "Shown as the page title.", Validators: trimmed},
 			"slug":          schema.StringAttribute{Required: true, Description: "The page's address, `<slug>.<status domain>`: 3 to 48 lowercase letters, digits or inner hyphens. Unique across Maple."},
 			"description":   optionalText("Text under the title."),
 			"website_url":   optionalText("Your site, linked from the page."),
@@ -183,7 +187,7 @@ func (r *statusPageResource) Schema(_ context.Context, _ resource.SchemaRequest,
 				Default:     listdefault.StaticValue(types.ListValueMust(types.ObjectType{AttrTypes: componentAttrTypes}, []attr.Value{})),
 				NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
 					"id":          schema.StringAttribute{Computed: true, Description: "The `stc_…` component ID, for incidents posted through the API."},
-					"name":        schema.StringAttribute{Required: true, Description: "Component name."},
+					"name":        schema.StringAttribute{Required: true, Description: "Component name.", Validators: trimmed},
 					"description": optionalText("Shown with the component."),
 					"group":       optionalText("Heading the component is listed under."),
 					"monitor_id":  schema.StringAttribute{Optional: true, Description: "The uptime monitor driving its status and uptime bars, typically `maple_uptime_monitor.<name>.id`."},
@@ -335,16 +339,26 @@ func (r *statusPageResource) apply(ctx context.Context, id string, plan statusPa
 		}
 	}
 
-	current, err := r.client.Get(ctx, base+"/config")
-	if err != nil {
-		return err
-	}
-	body, err := configBody(ctx, plan, current)
-	if err != nil {
-		return err
-	}
-	if _, err := r.client.Put(ctx, base+"/config", body); err != nil {
-		return fmt.Errorf("applying the config: %w", err)
+	// Conditional on the version read, so a manual status a responder sets meanwhile
+	// is not overwritten with the one read: a conflict reads the config again.
+	for attempt := 0; ; attempt++ {
+		current, err := r.client.Get(ctx, base+"/config")
+		if err != nil {
+			return err
+		}
+		body, err := configBody(ctx, plan, current)
+		if err != nil {
+			return err
+		}
+		_, err = r.client.Put(ctx, base+"/config?if_version="+url.QueryEscape(fmt.Sprint(current["version"])), body)
+		var apiErr *client.APIError
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusConflict && attempt < 3 {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("applying the config: %w", err)
+		}
+		break
 	}
 
 	if !plan.CustomDomain.IsNull() && domain["hostname"] != plan.CustomDomain.ValueString() {

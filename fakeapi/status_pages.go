@@ -13,6 +13,9 @@ type statusPage struct {
 	hasPassword bool
 	draft       bool
 	hostname    any
+	revision    int
+	// beforePut runs once before the next config write, as a responder racing an apply.
+	beforePut func(config map[string]any)
 }
 
 var defaultTheme = map[string]any{
@@ -39,6 +42,14 @@ func (p *statusPage) domain(id string) map[string]any {
 		"object": "status_page_custom_domain", "page_id": id, "available": true,
 		"cname_target": "status-domains.maple.test", "hostname": p.hostname, "dns_records": records,
 	}
+}
+
+func (p *statusPage) withVersion() map[string]any {
+	out := map[string]any{"version": fmt.Sprintf("v%d", p.revision)}
+	for k, v := range p.config {
+		out[k] = v
+	}
+	return out
 }
 
 func textOrNull(v any) any {
@@ -140,13 +151,23 @@ func (api *API) handleStatusPage(w http.ResponseWriter, r *http.Request, body ma
 		delete(api.pages, id)
 		writeJSON(w, map[string]any{"id": id, "object": "status_page", "deleted": true})
 	case "GET config":
-		writeJSON(w, page.config)
+		writeJSON(w, page.withVersion())
 	case "PUT config":
+		if page.beforePut != nil {
+			page.beforePut(page.config)
+			page.beforePut = nil
+			page.revision++
+		}
+		if v := r.URL.Query().Get("if_version"); v != "" && v != fmt.Sprintf("v%d", page.revision) {
+			writeError(w, http.StatusConflict, "conflict_error", "The page's config changed since it was read")
+			return
+		}
 		if status, message := api.applyConfig(id, page, body); status != 0 {
 			writeError(w, status, "invalid_request_error", message)
 			return
 		}
-		writeJSON(w, page.config)
+		page.revision++
+		writeJSON(w, page.withVersion())
 	case "PUT password":
 		page.hasPassword = true
 		writeJSON(w, page.view(id))
@@ -194,5 +215,16 @@ func (api *API) MutateStatusPage(id string, edit func(config map[string]any)) {
 	defer api.mu.Unlock()
 	if page, ok := api.pages[id]; ok {
 		edit(page.config)
+		page.revision++
+	}
+}
+
+// BeforeNextConfigWrite edits a status page's config right before the next config
+// write lands, as a responder changing a status while an apply is in flight.
+func (api *API) BeforeNextConfigWrite(id string, edit func(config map[string]any)) {
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	if page, ok := api.pages[id]; ok {
+		page.beforePut = edit
 	}
 }

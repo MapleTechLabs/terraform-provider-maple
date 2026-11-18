@@ -3,6 +3,7 @@ package provider
 import (
 	"fmt"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/MapleTechLabs/terraform-provider-maple/fakeapi"
@@ -10,6 +11,23 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
+
+func TestStatusPageRejectsUntrimmedNames(t *testing.T) {
+	api := fakeapi.New(t)
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{{
+			Config: providerBlock(api) + `
+resource "maple_status_page" "acme" {
+  name       = "Acme Status"
+  slug       = "acme-status"
+  components = [{ name = " API " }]
+}
+`,
+			ExpectError: regexp.MustCompile(`must not start or end with whitespace`),
+		}},
+	})
+}
 
 func TestStatusPageLifecycle(t *testing.T) {
 	api := fakeapi.New(t)
@@ -97,6 +115,23 @@ resource "maple_status_page" "acme" {
 				Check: resource.TestCheckResourceAttr(page, "theme.font", "sans"),
 			},
 			{
+				// A responder flips a status while the apply is in flight: the conditional
+				// write fails, and the retry reads and keeps their status.
+				PreConfig: func() {
+					api.BeforeNextConfigWrite(pageID, func(config map[string]any) {
+						config["components"].([]any)[0].(map[string]any)["manual_status"] = "major_outage"
+					})
+				},
+				Config: strings.Replace(initial, `support_url   = "https://acme.test/support"`, `support_url   = "https://acme.test/help"`, 1),
+				Check: func(*terraform.State) error {
+					_, config, _ := api.StatusPage(pageID)
+					if status := config["components"].([]any)[0].(map[string]any)["manual_status"]; status != "major_outage" {
+						return fmt.Errorf("the status set mid-apply was overwritten: %v", status)
+					}
+					return nil
+				},
+			},
+			{
 				// Internal needs the domain gone first; the password goes after the config.
 				Config: internal,
 				Check: resource.ComposeTestCheckFunc(
@@ -113,7 +148,7 @@ resource "maple_status_page" "acme" {
 							return fmt.Errorf("page not internal without password and domain: %v %v", view, hostname)
 						}
 						api := config["components"].([]any)[1].(map[string]any)
-						if api["manual_status"] != "degraded" {
+						if api["manual_status"] != "major_outage" {
 							return fmt.Errorf("the responder's manual status was overwritten: %v", api)
 						}
 						return nil
